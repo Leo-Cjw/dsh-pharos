@@ -23,8 +23,14 @@
     "lib/index.js",
     "lib/client.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "assets/"
   ],
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "prepublishOnly": "npm test"
+  },
   "keywords": [
     "deepseek-harness",
     "dsh",

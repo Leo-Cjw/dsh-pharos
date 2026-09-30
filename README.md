@@ -18,6 +18,18 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」**�
 - 页面加载时已存在的待办补提醒一次；历史完成状态不补弹。
 - 主开关关闭后：不弹通知、不响铃、不亮标记、不闪烁。
 
+## 效果示意
+
+![需要你操作：系统通知](assets/screenshot-1-attention.png)
+
+![需要你操作：10 分钟仍未处理补发](assets/screenshot-2-realert.png)
+
+![回复完成：带耗时小结](assets/screenshot-3-done.png)
+
+![标签页标题标记](assets/screenshot-4-title-marker.png)
+
+> 图为插件真实文案模板的示意渲染（`lib/client.js` 的 TEXT 表与默认配置值），实际展现于本机系统通知与 DSH 标签页。
+
 ## 配置
 
 配置存 `localStorage`（键 `dshPharos.config`），控制台实时生效：
@@ -48,8 +60,9 @@ window.__dshPharos.debug()            // 绑定/权限/待办/定时器诊断
 
 通过公开 GitHub 仓库一键安装（零构建、零依赖，**仓库根即插件包**）：
 
-- **桌面端（推荐）**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
-- **CLI**：`dsh plugin add github:Leo-Cjw/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
+- **npm（发布后可用，推荐）**：`dsh plugin add dsh-pharos` —— npm 包为预构建产物，免 `allowBuilds` 授权，一条命令装好
+- **桌面端**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
+- **CLI（GitHub 源）**：`dsh plugin add github:Leo-Cjw/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
 
 仓库结构（即安装后的布局）：
 
@@ -67,10 +80,10 @@ lib/client.js       # browser 半（全部逻辑：零 require 依赖）
 从 GitHub 克隆本仓库开发（`git clone git@github.com:Leo-Cjw/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
 
 - 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`，27/27 断言，覆盖需要你/二次提醒/标题标记/完成耗时/主开关/点击跳转/闪烁兜底）
-- 发布流程：改 `lib/` 与 `package.json` → 跑测试 → 升版本 → `git push` → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention")` / `("done")` 验证
-- 架构文档：[functional-architecture.md](docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
-- 架构图：[pharos-architecture.html](docs/diagrams/pharos-architecture.html)（浏览器半 × Host 半双层结构）· [pharos-sequence.html](docs/diagrams/pharos-sequence.html)（通知事件流）——浏览器打开即交互（主题切换/聚焦/导出）
-- 对标仓库代码级分析：docs/research/（notify-me / turn-notify / my-notify / session-notify 逐文件报告）
+- 发布流程：改 `lib/` 与 `package.json` → 跑测试 → 升版本 → `npm publish`（发布前自动跑冒烟测试）→ `git push` → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention")` / `("done")` 验证
+- 架构文档：[functional-architecture.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
+- 架构图：[pharos-architecture.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-architecture.html)（浏览器半 × Host 半双层结构）· [pharos-sequence.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-sequence.html)（通知事件流）——浏览器打开即交互（主题切换/聚焦/导出）
+- 对标仓库代码级分析：[docs/research/](https://github.com/Leo-Cjw/dsh-pharos/tree/main/docs/research)（notify-me / turn-notify / my-notify / session-notify 逐文件报告）
 
 ## 工作原理
 
