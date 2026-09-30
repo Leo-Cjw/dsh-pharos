@@ -1,7 +1,7 @@
 {
   "name": "dsh-pharos",
-  "version": "0.3.0",
-  "description": "DSH 桌面守望提醒插件：模型需要你操作（审批/方案确认/提问）或回复在后台完成时，系统通知 + 提示音 + 标题标记提醒你；完成通知带耗时小结，未处理的待办 10 分钟后二次提醒，通知不可用时标题闪烁兜底。Pharos lighthouse for DeepSeek Harness — alerts you when the agent needs your input (approval / plan review / question) or a reply finishes in the background: toasts, chimes, a tab-title marker, duration summary, one-shot re-alert for unanswered requests, and a blink fallback when notifications are unavailable.",
+  "version": "0.4.0",
+  "description": "DSH 桌面守望提醒插件（v0.4：host 桥 + 浏览器双半）。模型需要你操作（审批/方案确认/提问）或回复在后台完成时提醒你；v0.4 新增出错/中断/上限通知、SSE 帧桥、Webhook（企微/飞书/钉钉/通用）、远程触发、安静时段、子代理过滤与设置页。Pharos lighthouse for DeepSeek Harness — alerts you when the agent needs your input or a reply finishes in the background, now with error/interrupt/limit alerts, SSE bridge, webhooks, remote trigger, quiet hours, and a settings tab.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -22,13 +22,18 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "lib/host.js",
+    "lib/host/",
+    "tools/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
     "assets/"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs",
+    "build": "node tools/sync-settings-view.mjs",
+    "pretest": "node tools/sync-settings-view.mjs",
+    "test": "node test/smoke.mjs && node test/host.test.mjs",
     "prepublishOnly": "npm test"
   },
   "keywords": [
