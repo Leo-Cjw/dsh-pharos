@@ -5,11 +5,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<owner>/dsh-pharos.git"
+    "url": "git+https://github.com/Leo-Cjw/dsh-pharos.git"
   },
-  "homepage": "https://github.com/<owner>/dsh-pharos",
+  "homepage": "https://github.com/Leo-Cjw/dsh-pharos",
   "bugs": {
-    "url": "https://github.com/<owner>/dsh-pharos/issues"
+    "url": "https://github.com/Leo-Cjw/dsh-pharos/issues"
   },
   "type": "module",
   "main": "lib/index.js",

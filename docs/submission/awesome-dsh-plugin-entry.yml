@@ -1,9 +1,8 @@
 # awesome-dsh-plugin 收录条目（投稿文件）
-# 提交方式：fork awesome-dsh-plugin → 新增 data/plugins/<owner>__dsh-pharos.yml → 重新生成 README → PR
-# 提交前把下面 4 处 OWNER 替换为实际 GitHub 用户名；文件名同步改为 <owner>__dsh-pharos.yml。
+# 提交方式：fork awesome-dsh-plugin → 新增 data/plugins/Leo-Cjw__dsh-pharos.yml → 重新生成 README → PR
 
-url: https://github.com/OWNER/dsh-pharos
-name: OWNER/dsh-pharos
+url: https://github.com/Leo-Cjw/dsh-pharos
+name: Leo-Cjw/dsh-pharos
 category: notify
 description:
   en: 'Alerts you when the DeepSeek Harness agent needs your input or a reply finishes in the background — system notification, chime and tab-title marker, a one-shot re-alert for unanswered requests, a duration summary, and a title-blink fallback when notifications are unavailable.'

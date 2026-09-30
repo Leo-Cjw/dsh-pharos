@@ -48,8 +48,8 @@ window.__dshPharos.debug()            // 绑定/权限/待办/定时器诊断
 
 通过公开 GitHub 仓库一键安装（零构建、零依赖，**仓库根即插件包**）：
 
-- **桌面端（推荐）**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:<owner>/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
-- **CLI**：`dsh plugin add github:<owner>/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
+- **桌面端（推荐）**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
+- **CLI**：`dsh plugin add github:Leo-Cjw/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
 
 仓库结构（即安装后的布局）：
 
@@ -62,11 +62,9 @@ lib/client.js       # browser 半（全部逻辑：零 require 依赖）
 
 重启后在控制台验证：`window.__dshPharos.test("done")`。
 
-> ⚠️ 将 `<owner>` 替换为实际的 GitHub 用户名/组织后再安装。
-
 ## 开发
 
-从 GitHub 克隆本仓库开发（`git clone git@github.com:<owner>/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
+从 GitHub 克隆本仓库开发（`git clone git@github.com:Leo-Cjw/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
 
 - 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`，27/27 断言，覆盖需要你/二次提醒/标题标记/完成耗时/主开关/点击跳转/闪烁兜底）
 - 发布流程：改 `lib/` 与 `package.json` → 跑测试 → 升版本 → `git push` → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention")` / `("done")` 验证
