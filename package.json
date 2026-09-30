@@ -24,6 +24,7 @@
     "lib/client.js",
     "lib/host.js",
     "lib/host/",
+    "lib/settings-view.js",
     "tools/",
     "cordis.patch.yml",
     "README.md",

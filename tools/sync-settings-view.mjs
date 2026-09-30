@@ -2,9 +2,11 @@
 //
 // 背景：浏览器半是单文件 bundle（__ModuleLoader__ 只服务一块 entry），
 // 运行时无法按文件加载 lib/settings-view.js，因此视图以内联形式存在于
-// lib/client.js 的 //#region settings-view 块（契约 §1 文件职责）。
-// 本脚本保持「独立文件为规范源」：视图改动只改 settings-view.js，
-// 然后运行本脚本重新生成内联区（pretest 会自动执行）。
+// lib/client.js 的 //#region settings-view … //#endregion settings-view 块
+// （契约 §1 文件职责）。本脚本保持「独立文件为规范源」：视图改动只改
+// settings-view.js，然后运行本脚本重新生成内联区（pretest 会自动执行）。
+//
+// 幂等：按 region 边界整体替换，重复运行输出一致（第二次跑不会再报错）。
 //
 // 用法：node tools/sync-settings-view.mjs   （幂等；输出已同步提示）
 
@@ -15,13 +17,28 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const viewFile = path.join(root, 'lib', 'settings-view.js');
 const clientFile = path.join(root, 'lib', 'client.js');
-const MARKER = '//__SETTINGS_VIEW__//';
+const REGION_START = '//#region settings-view';
+const REGION_END = '//#endregion settings-view';
 
 const view = fs.readFileSync(viewFile, 'utf8');
 const client = fs.readFileSync(clientFile, 'utf8');
 
-if (!client.includes(MARKER)) {
-  console.error(`[sync-settings-view] ${clientFile} 缺少内联标记 ${MARKER}（可能已被改写？）`);
+// 按「行」定位 region 边界：trim 后精确等于标记的行。缩进无关、
+// 也不怕文件头注释里的字面串（trim 后不相等，不会误匹配）。
+const lines = client.split('\n');
+let regionStartLine = -1;
+let regionEndLine = -1;
+for (let i = 0; i < lines.length; i++) {
+  const trimmed = lines[i].trim();
+  if (trimmed === REGION_START) { regionStartLine = i; break; }
+}
+if (regionStartLine >= 0) {
+  for (let i = regionStartLine + 1; i < lines.length; i++) {
+    if (lines[i].trim() === REGION_END) { regionEndLine = i; break; }
+  }
+}
+if (regionStartLine < 0 || regionEndLine < 0) {
+  console.error(`[sync-settings-view] ${clientFile} 缺少 region 边界（${REGION_START} / ${REGION_END}，可能已被改写？）`);
   process.exit(1);
 }
 
@@ -34,17 +51,20 @@ if (open < 0 || tail < 0 || tail <= open) {
   process.exit(1);
 }
 let body = view.slice(open, tail);
-// 去掉末尾注释行与空行，保持干净
 body = body.replace(/\s*$/, '\n');
-
-// 主体以 `(function (globalScope) {` 开头，截掉它（由下面的包裹改回）
 body = body.replace(/^\(function \(globalScope\) \{/, '');
+
 const inline =
-  'var pharosSettingsView = (function (globalScope) { // eslint-disable-line no-unused-vars\n' +
+  '\t// 规范源：lib/settings-view.js —— 修改视图请改独立文件，然后运行\n' +
+  '\t// `node tools/sync-settings-view.mjs` 重新生成本 region（保证同步；pretest 自动执行）。\n' +
+  '\tvar pharosSettingsView = (function (globalScope) { // eslint-disable-line no-unused-vars\n' +
   body +
   '\treturn { mountSettingsTab: mountSettingsTab };\n' +
-  '})(typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : this));\n';
+  '\t})(typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : this));\n';
 
-const next = client.replace(MARKER, inline);
+const head = lines.slice(0, regionStartLine).join('\n');
+const tailLines = lines.slice(regionEndLine + 1);
+const next = head + '\n' + REGION_START + '\n' + inline + '\t' + REGION_END +
+  (tailLines.length > 0 ? '\n' + tailLines.join('\n') : '');
 fs.writeFileSync(clientFile, next);
 console.log(`[sync-settings-view] 已内联 ${(inline.match(/\n/g) || []).length} 行视图代码 → ${clientFile}`);
