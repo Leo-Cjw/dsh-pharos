@@ -1,0 +1,6 @@
+# dsh-pharos profile patch layer — insert one loader entry for the plugin
+# package. Browser half is picked up by dsh-client-modules through the
+# package's dsh.client declaration, exactly like the shipped ui-* packages.
+- insert:
+    - id: dsh-pharos
+      name: 'dsh-pharos'

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "dsh-pharos 功能架构（M1 目标）",
+    "output": "docs/diagrams/pharos-architecture.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "host-src", "type": "backend", "pos": [70, 60], "size": [240, 96], "label": "Host 触发源", "sublabel": "ctx.on：session/event · agent/* · jobs" },
+    { "id": "browser-src", "type": "frontend", "pos": [560, 60], "size": [250, 96], "label": "浏览器触发源", "sublabel": "uiSession.sessionStatus · sessions" },
+    { "id": "bus", "type": "messagebus", "pos": [70, 240], "size": [240, 110], "label": "PharosEvent 帧总线", "sublabel": "统一事件帧 · 帧级去重" },
+    { "id": "sse", "type": "messagebus", "pos": [360, 255], "size": [150, 70], "label": "SSE 通知流", "sublabel": "同源 · 心跳" },
+    { "id": "policy", "type": "frontend", "pos": [560, 240], "size": [300, 130], "label": "策略层", "sublabel": "去重 · 节流 · 静默 · quiet hours · 子代理过滤" },
+    { "id": "settings", "type": "frontend", "pos": [940, 240], "size": [240, 110], "label": "设置页", "sublabel": "settings.plugins.tab 槽位" },
+    { "id": "api", "type": "backend", "pos": [70, 460], "size": [240, 110], "label": "/pharos/api 路由", "sublabel": "trigger · config · webhooks（同源）" },
+    { "id": "channels", "type": "frontend", "pos": [560, 450], "size": [300, 130], "label": "浏览器渠道", "sublabel": "系统通知 · 提示音 · 标题标记 · toast" },
+    { "id": "webhook", "type": "external", "pos": [480, 600], "size": [240, 72], "label": "Webhook 推送", "sublabel": "企微 · 飞书 · 钉钉 · generic" },
+    { "id": "user", "type": "external", "pos": [760, 600], "size": [240, 72], "label": "你（用户）", "sublabel": "macOS 通知中心 / 页面" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Host 半 · Electron 主进程", "wraps": ["host-src", "bus", "api"] },
+    { "kind": "region", "label": "浏览器半 · DSH Web UI", "wraps": ["browser-src", "policy", "settings", "channels"] }
+  ],
+  "connections": [
+    { "id": "host-to-bus", "from": "host-src", "to": "bus" },
+    { "id": "browser-to-policy", "from": "browser-src", "to": "policy", "fromSide": "bottom", "toSide": "top" },
+    { "id": "bus-to-sse", "from": "bus", "to": "sse", "label": "帧广播" },
+    { "id": "sse-to-policy", "from": "sse", "to": "policy", "label": "SSE 帧" },
+    { "id": "policy-to-channels", "from": "policy", "to": "channels" },
+    { "id": "channels-to-user", "from": "channels", "to": "user", "label": "通知 · 音效 · 标记", "fromSide": "bottom", "toSide": "top", "labelDy": 10 },
+    { "id": "settings-to-policy", "from": "settings", "to": "policy", "label": "配置下发", "variant": "dashed", "labelAt": [890, 330] },
+    { "id": "api-to-bus", "from": "api", "to": "bus", "label": "事件注入" },
+    { "id": "bus-to-webhook", "from": "bus", "to": "webhook", "label": "异步推送", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "浏览器半 · M0 延续", "items": ["需要你 / 完成 / 二次提醒 / 标题标记·闪烁（v0.3 已交付）", "点击通知直达会话 · DOM toast 兜底"] },
+    { "dot": "emerald", "title": "Host 桥 · M1 新增", "items": ["出错 / 中断 / 上限事件（reason.kind 双轨判定）", "SSE + webhook 双通道 · POST /trigger 远程触发", "设置页 settings.plugins.tab · quiet hours · 子代理过滤"] },
+    { "dot": "rose", "title": "统计 · M2", "items": ["usage 聚合 · tokenUsage / sessionStats 官方投影", "当轮统计，不落累计库"] }
+  ]
+}

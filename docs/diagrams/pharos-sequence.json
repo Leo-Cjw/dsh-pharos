@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "dsh-pharos 通知流转（M1）",
+    "output": "docs/diagrams/pharos-sequence.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1320, 650]
+  },
+  "participants": [
+    { "id": "agent", "type": "backend", "label": "Agent / 会话", "sublabel": "session/event · agent" },
+    { "id": "host", "type": "backend", "label": "PharosHost", "sublabel": "帧总线 · 路由" },
+    { "id": "webhook", "type": "external", "label": "Webhook 服务", "sublabel": "企微 · 飞书 · 钉钉" },
+    { "id": "remote", "type": "external", "label": "外部脚本", "sublabel": "POST /trigger" },
+    { "id": "client", "type": "frontend", "label": "PharosClient", "sublabel": "策略层 · 渠道层" },
+    { "id": "user", "type": "external", "label": "你（用户）", "sublabel": "macOS 通知中心" }
+  ],
+  "segments": [
+    { "from": 150, "to": 300, "label": "事件定类 · 双轨判定" },
+    { "from": 300, "to": 450, "label": "SSE 派发 · 在场提醒" },
+    { "from": 450, "to": 600, "label": "响应 · 补发" }
+  ],
+  "messages": [
+    { "from": "agent", "to": "host", "y": 170, "label": "session/event · turn/end（reason.kind）", "variant": "emphasis", "note": "主信号：completed / error / interrupted / max-tokens；缺失时以 agent/error · agent/status 兜底" },
+    { "from": "host", "to": "webhook", "y": 214, "label": "推送 webhook 帧", "variant": "dashed" },
+    { "from": "remote", "to": "host", "y": 248, "label": "POST /pharos/api/trigger", "variant": "security", "note": "同源 + x-pharos-token" },
+    { "from": "host", "to": "client", "y": 292, "label": "SSE 帧（PharosEvent）", "variant": "emphasis", "note": "帧级去重 · 心跳保活" },
+    { "from": "client", "to": "user", "y": 348, "label": "系统通知 + 提示音 + 🔔/⏳ 标记", "variant": "emphasis", "note": "策略层：去重 · 节流 · 静默 · quiet hours · 子代理过滤" },
+    { "from": "user", "to": "client", "y": 402, "label": "点击通知", "variant": "return" },
+    { "from": "client", "to": "agent", "y": 468, "label": "sessions.binding(id).session.open()", "variant": "dashed", "note": "聚焦 + 打开对应会话（best-effort）" },
+    { "from": "client", "to": "user", "y": 520, "label": "10 分钟未处理 → 补发一次", "variant": "dashed", "note": "reAlertMs；交互消失即撤销" }
+  ],
+  "activations": [
+    { "participant": "host", "from": 152, "to": 310, "type": "backend" },
+    { "participant": "client", "from": 276, "to": 480, "type": "frontend" },
+    { "participant": "client", "from": 500, "to": 540, "type": "frontend" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "双轨判定", "items": ["reason.kind 主信号（completed/error/interrupted/max-tokens）", "agent/error · agent/status · jobs 兜底；未知 kind 降级为 done"] },
+    { "dot": "cyan", "title": "双通道派发", "items": ["SSE 帧 → 浏览器在场提醒（策略层过滤）", "webhook → 企微/飞书/钉钉（异步 · 加签）", "POST /trigger 远程注入（同源 + token）"] },
+    { "dot": "rose", "title": "响应与补发", "items": ["点击通知 → 聚焦 + 打开会话（best-effort）", "未处理的「需要你」10 分钟补发一次"] }
+  ]
+}

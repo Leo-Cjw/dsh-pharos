@@ -1,0 +1,59 @@
+{
+  "name": "dsh-pharos",
+  "version": "0.3.0",
+  "description": "DSH 桌面守望提醒插件：模型需要你操作（审批/方案确认/提问）或回复在后台完成时，系统通知 + 提示音 + 标题标记提醒你；完成通知带耗时小结，未处理的待办 10 分钟后二次提醒，通知不可用时标题闪烁兜底。Pharos lighthouse for DeepSeek Harness — alerts you when the agent needs your input (approval / plan review / question) or a reply finishes in the background: toasts, chimes, a tab-title marker, duration summary, one-shot re-alert for unanswered requests, and a blink fallback when notifications are unavailable.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/<owner>/dsh-pharos.git"
+  },
+  "homepage": "https://github.com/<owner>/dsh-pharos",
+  "bugs": {
+    "url": "https://github.com/<owner>/dsh-pharos/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "desktop-notification",
+    "notify",
+    "alerts",
+    "reminder",
+    "needs-your-input",
+    "background-alert",
+    "桌面通知",
+    "消息提醒",
+    "需要你操作",
+    "回复完成提醒",
+    "任务完成"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-session"
+      ],
+      "platform": "web"
+    }
+  }
+}
