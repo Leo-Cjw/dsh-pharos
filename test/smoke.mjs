@@ -43,16 +43,27 @@ global.Notification = class {
 let captured = null;
 
 // ================= M1 增补 stub（中性：等价"无 host"，不影响上述 v0.3 断言语义） =================
-// EventSource：构造记录 + 手动 dispatch；默认自动 open（贴近真实连接，但不产生任何帧）
+// EventSource：构造记录 + 手动 dispatch；默认自动 open（贴近真实连接，但不产生任何帧）。
+// 命名事件建模（WHATWG SSE 规范）：dispatch(payload, eventName) —— 带 event 名的帧
+// 只派发给 addEventListener 注册的同名监听器、绝不进 onmessage；无名帧只进 onmessage。
+// namedListeners 同时是契约锁的唯一事实源（client 注册的事件名必须与 host 写出的一致）。
 global.EventSource = class FakeEventSource {
   constructor(url, opts) {
     this.url = url; this.opts = opts ?? {};
-    this.readyState = 0; this.onopen = this.onmessage = this.onerror = null; this.closed = false;
+    this.readyState = 0; this.onopen = this.onmessage = this.onerror = null;
+    this.namedListeners = new Map(); // type -> [fn, ...]
+    this.closed = false;
     FakeEventSource.instances.push(this);
     if (FakeEventSource.openOnConstruct) queueMicrotask(() => { this.readyState = 1; this.onopen?.({}); });
   }
   close() { this.closed = true; this.readyState = 2; }
-  dispatch(payload) { const ev = typeof payload === 'string' ? { data: payload } : { data: JSON.stringify(payload) }; this.onmessage?.(ev); }
+  addEventListener(ev, fn) { const a = this.namedListeners.get(ev) ?? []; a.push(fn); this.namedListeners.set(ev, a); }
+  removeEventListener(ev, fn) { this.namedListeners.set(ev, (this.namedListeners.get(ev) ?? []).filter((f) => f !== fn)); }
+  dispatch(payload, eventName) {
+    const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    if (eventName) { for (const fn of this.namedListeners.get(eventName) ?? []) fn({ data }); return; }
+    this.onmessage?.({ data });
+  }
   open() { this.readyState = 1; this.onopen?.({}); }
   _error() { this.onerror?.({}); }
   static instances = [];
@@ -382,7 +393,7 @@ if (!m1Ready) {
         const note = `SSE-${kind}-正文-XYZ`;
         const beforeNotif = r.bag.notifications.length;
         const beforeAudio = r.bag.audioCtx;
-        es.dispatch(m1Frame(kind, kind.toUpperCase(), note));
+        es.dispatch(m1Frame(kind, kind.toUpperCase(), note), 'pharos');
         await m1Wait(40);
         m1a(r.bag.notifications.length === beforeNotif + 1, `SSE ${kind} 帧 → 弹一次通知`);
         m1a(r.bag.notifications.at(-1)?.body.includes(note), `SSE ${kind} 通知正文含帧 note`);
@@ -409,11 +420,11 @@ if (!m1Ready) {
     const n1 = r.bag.notifications.length;
     m1a(n1 === 1, 'uiSession running→false 边沿 done 弹一次（总数 ' + n1 + '）');
     // ② 同 session 的 SSE done 帧（去重窗内）→ 不新增
-    es.dispatch(m1Frame('done', 'D2', 'host方完成同会话'));
+    es.dispatch(m1Frame('done', 'D2', 'host方完成同会话'), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === n1, '双源 done 同 key（SSE + uiSession）只弹一次');
     // ③ 对照：不同 session 的 SSE done 正常弹
-    es.dispatch(m1Frame('done', 'E1', '其他会话完成'));
+    es.dispatch(m1Frame('done', 'E1', '其他会话完成'), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === n1 + 1, '不同 session 的 SSE done 正常弹出');
     void doneTitle;
@@ -429,7 +440,7 @@ if (!m1Ready) {
     }));
     m1Apply(r);
     const es = r.ES.instances.at(-1);
-    es.dispatch(m1Frame('done', 'Q1', 'quiet正文'));
+    es.dispatch(m1Frame('done', 'Q1', 'quiet正文'), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 0, 'quiet hours 生效期（23:30∈23:00-08:00）不弹');
     m1a(!r.bag.title.startsWith('🔔'), 'quiet hours 生效期不亮标记');
@@ -443,7 +454,7 @@ if (!m1Ready) {
     }));
     m1Apply(r);
     const es = r.ES.instances.at(-1);
-    es.dispatch(m1Frame('done', 'Q2', 'quiet正文2'));
+    es.dispatch(m1Frame('done', 'Q2', 'quiet正文2'), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 1, 'quiet hours 窗口外（10:00）恢复通知');
   }
@@ -456,14 +467,14 @@ if (!m1Ready) {
     m1Apply(r);
     const es = r.ES.instances.at(-1);
     // 默认 skipSubagents=true
-    es.dispatch(m1Frame('done', 'D1', '子代理完成', { agentType: 'subagent' }));
+    es.dispatch(m1Frame('done', 'D1', '子代理完成', { agentType: 'subagent' }), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 0, 'skipSubagents 默认丢弃子代理 done 帧');
-    es.dispatch(m1Frame('done', 'D2', '顶层完成', { agentType: 'root' }));
+    es.dispatch(m1Frame('done', 'D2', '顶层完成', { agentType: 'root' }), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 1, 'root done 帧正常弹出');
     r.context.window.__dshPharos.setConfig({ skipSubagents: false });
-    es.dispatch(m1Frame('done', 'D1', '子代理再完成', { agentType: 'subagent', dedupeKey: 'done:D1b' }));
+    es.dispatch(m1Frame('done', 'D1', '子代理再完成', { agentType: 'subagent', dedupeKey: 'done:D1b' }), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 2, 'skipSubagents=false 时子代理帧恢复弹出');
   }
@@ -476,7 +487,7 @@ if (!m1Ready) {
     r.context.document.bodyChildren.length = 0;
     const d = m1Apply(r);
     const es = r.ES.instances.at(-1);
-    es.dispatch(m1Frame('done', 'T1', 'TOAST-1'));
+    es.dispatch(m1Frame('done', 'T1', 'TOAST-1'), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 0, '权限 denied 不弹系统通知');
     const box = r.context.document.getElementById('dsh-pharos-toast-box') ?? r.context.document.queryBody('.dsh-pharos-toast-box');
@@ -488,7 +499,7 @@ if (!m1Ready) {
     m1a(r.bag.opened.includes('T1') || r.bag.opened.length > 0, '点击 toast 尝试打开会话');
     // 上限 4 条：连续 5 个不同事件
     for (let i = 2; i <= 6; i++) {
-      es.dispatch(m1Frame('done', 'T' + i, 'TOAST-' + i));
+      es.dispatch(m1Frame('done', 'T' + i, 'TOAST-' + i), 'pharos');
     }
     await m1Wait(80);
     m1a(toastEls().length <= 4, 'toast 上限 4 条（当前 ' + toastEls().length + '）');
@@ -518,7 +529,7 @@ if (!m1Ready) {
     }
     m1a(typeof api === 'object' && typeof api.config === 'function' && api.config().enabled === false, '服务端配置缓存覆盖 localStorage（enabled=false）');
     const es = r.ES.instances.at(-1);
-    es.dispatch(m1Frame('done', 'S1', '服务端关闭'));
+    es.dispatch(m1Frame('done', 'S1', '服务端关闭'), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 0, '服务端 enabled=false 时不发通知');
   }
@@ -530,7 +541,7 @@ if (!m1Ready) {
     m1Apply(r);
     m1a(r.context.window.__dshPharos.config().enabled === true, '服务端不可达回退 localStorage（enabled=true）');
     const es = r.ES.instances.at(-1);
-    es.dispatch(m1Frame('done', 'S2', '本地回退'));
+    es.dispatch(m1Frame('done', 'S2', '本地回退'), 'pharos');
     await m1Wait(60);
     m1a(r.bag.notifications.length === 1, '回退 localStorage 后通知照发');
   }
@@ -550,10 +561,36 @@ if (!m1Ready) {
       m1a(frameTitle(kind).test(r.bag.notifications.at(-1)?.title ?? '') === true, `test('${kind}') 标题匹配文案`);
     }
   }
+
+  // ---- M1-H: SSE 命名/无名路由契约（R1 回归 + 契约锁） ----
+  {
+    localStorage.removeItem('dshPharos.config');
+    const r = m1Reload({ bag: { pageFocus: false } });
+    global.EventSource.instances.length = 0;
+    m1Apply(r);
+    const es = r.ES.instances.at(-1);
+    // ① 命名帧 → 弹通知，且绝不进 onmessage 注册的处理器（WHATWG SSE 路由）
+    let onmessageCalls = 0;
+    const origOnmessage = es.onmessage;
+    es.onmessage = (ev) => { onmessageCalls += 1; origOnmessage?.(ev); };
+    es.dispatch(m1Frame('remote', 'H1', '命名帧路由'), 'pharos');
+    await m1Wait(40);
+    m1a(r.bag.notifications.at(-1)?.body.includes('命名帧路由') === true, '命名帧（event:pharos）→ 弹通知');
+    m1a(onmessageCalls === 0, '命名帧绝不触发 onmessage 处理器');
+    // ② 无名帧 → onmessage 兼容路（client 故意保留，防宿主未来发无名帧）
+    const before = r.bag.notifications.length;
+    es.dispatch(m1Frame('remote', 'H2', '无名帧兼容'));
+    await m1Wait(40);
+    m1a(r.bag.notifications.length === before + 1, '无名帧走 onmessage 兼容路 → 弹通知');
+    // ③ 契约锁：client 注册的事件名与 host 写出的一致（routes.js 全局唯一 event: 命中）
+    const hostSrc = fs.readFileSync(new URL('../lib/host/routes.js', import.meta.url), 'utf8');
+    const wireEvent = /event:\s*([A-Za-z0-9_-]+)/.exec(hostSrc)?.[1];
+    m1a(typeof wireEvent === 'string' && es?.namedListeners?.has(wireEvent), `契约锁：client 注册的事件名与 host 写出的一致（${wireEvent}）`);
+  }
 }
 
-console.log(failed === 0
+console.log(failed + m1Failed === 0
   ? `\n全部断言通过（v0.3 ${notifications.length} 条通知 / audioCtx ${audioCtxCreated}；M1 ${m1Passed} 项）`
-  : `\n${failed} 项失败`);
+  : `\n${failed} 项失败（v0.3）+ ${m1Failed} 项失败（M1）`);
 const totalFailed = failed + m1Failed;
 process.exit(totalFailed === 0 ? 0 : 1);
