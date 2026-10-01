@@ -113,7 +113,7 @@ const DEFAULT_CONFIG = {
 - job 事件：`ctx.jobs.events.subscribe({owners:'scope'}, e => …)`；e.type∈settled/removed；job.status∈running/stopping/completed/killed/failed（dsh-tool-jobs）。
 - 设置页槽位：**`settings.plugins.tab`** 本机存在（dsh-client-ui-settings-plugins 渲染 per-plugin row）；`settings.section` 不存在。
 - 跳会话：`sessions.binding(id)?.session.open()` 存在（api-session-controller client.js:1857/3110/3400）；`sessions.open(id)` 不存在。
-- 服务注入：host `ctx.inject(['webServer'], cb)`、`ctx.get(name, false)` 惰性查；client `ctx.get('slots', false)`。
+- 服务注入：host `ctx.inject(['webServer'], cb)`、`ctx.get(name, false)` 惰性查；client 插件**必须把读取的服务全部声明进 inject**——cordis 上下文代理对未声明服务的直接属性读（`ctx.sessions` / `ctx.uiSession` / `ctx.slots`）抛 `cannot get property X without inject`（0.2.0-rc.2 实测，dsh-notify-me lib/client.js:20-21 同款教训）；本插件声明 `["sessions", "uiSession", "slots"]`，且 apply 永不外抛（避免 cordis 上报 `web boot: … did not activate` 触发 fail-loud 恢复流程重写 profile 补丁）。服务按树序激活可能晚于本条目，apply 用 500ms×60 重试延迟接管（照 dsh-notify-me）。
 
 **需冲刺核实（实现成员开工前 30-60min 内查源码定案）**：
 1. **React 获取（pharos-settings）**：在浏览器 bundle 里怎么拿到 react？查 `/Users/mia/.dsh/profiles/desktop/node_modules/dshmarket/client/client.js`（其设置视图用的 React import 方式）与 `/tmp/dsh-checkout/node_modules/@deepseek-ai/dsh-cordis-client-runner/lib/client.js`（slots.register 契约：返回 React element 还是别的）。结论三选一：(a) `require('react')` 可用 → 直接 import；(b) runner 提供全局 React → 用之；(c) 都不行 → 视图用纯 DOM 构造并确认 register 能收非 React 渲染产物，否则把设置页降级标记 M1.5。**最终以 (a) 优先——dshmarket 设置页即 React（peer 声明 react ^18||^19 无 @deepseek-ai 门禁）。**
