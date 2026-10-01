@@ -67,13 +67,31 @@ window.__dshPharos.debug()            // 绑定/权限/待办/定时器/SSE 状�
 - **桌面端**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
 - **CLI（GitHub 源）**：`dsh plugin add github:Leo-Cjw/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
 
+**本机开发安装**（改本地代码直接生效，无需发布）：
+
+```bash
+# ① 把仓库同步到 profile 的 local-plugins（源码地）
+cp -R <repo>/ ~/.dsh/profiles/desktop/local-plugins/dsh-pharos
+# ② 登记进 profile manifest（dependencies + bundles；link: 保持指向 local-plugins）
+#    "dependencies": { ..., "dsh-pharos": "link:./local-plugins/dsh-pharos" }
+#    "dsh.profile.bundles": [ ..., "dsh-pharos" ]
+# ③ 物化 node_modules 链接（供应链年龄策略对本地 link 不适用，绕过校验即可）
+pnpm install --dir ~/.dsh/profiles/desktop --config.minimumReleaseAge=0
+# ④ 确认链接存在，然后重启 DeepSeek Harness
+ls -la ~/.dsh/profiles/desktop/node_modules/dsh-pharos   # → ../local-plugins/dsh-pharos
+```
+
+> 注意：profile 的 node_modules 由插件管理器在启动时用 pnpm 重建，**不在 dependencies 里的包会被清掉**——这就是「装完重启后插件消失」的原因。务必走 ②③ 的登记流程。
+
 仓库结构（即安装后的布局）：
 
 ```
 package.json        # dsh.bundle.patch + dsh.client 声明（browser 半，platform: web）
 cordis.patch.yml    # 自挂载 loader 行（id/name: dsh-pharos）
-lib/index.js        # host 半（no-op，仅为合法 Loader 行）
-lib/client.js       # browser 半（全部逻辑：零 require 依赖）
+lib/index.js        # host 半入口（apply → host.js：事件桥/SSE/Webhook/配置）
+lib/host.js         # host 半组装（订阅/帧总线/出口过滤）；lib/host/* 为模块
+lib/client.js       # browser 半（全部逻辑 + 内联设置页；零 npm 运行时依赖）
+lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 tools/sync-settings-view.mjs）
 ```
 
 重启后在控制台验证：`window.__dshPharos.test("done")`。
