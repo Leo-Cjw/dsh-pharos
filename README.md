@@ -24,15 +24,17 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 
 ## 效果示意
 
-![需要你操作：系统通知](assets/screenshot-1-attention.png)
+![系统通知横幅：回复完成，点击回到 DSH 查看](<assets/系统通知横幅.png>)
 
-![需要你操作：10 分钟仍未处理补发](assets/screenshot-2-realert.png)
+![插件总览：dsh-pharos v0.4.1（插件详情与设置入口）](<assets/插件总览.png>)
 
-![回复完成：带耗时小结](assets/screenshot-3-done.png)
+![消息通知配置（一）：设置入口与基本设置](<assets/消息通知1.png>)
 
-![标签页标题标记](assets/screenshot-4-title-marker.png)
+![消息通知配置（二）：提醒时机](<assets/消息通知2.png>)
 
-> 图为插件真实文案模板的示意渲染（`lib/client.js` 的 TEXT 表与默认配置值），实际展现于本机系统通知与 DSH 标签页。
+![消息通知配置（三）：过滤与 Webhook 推送](<assets/消息通知3.png>)
+
+> 图为 macOS 本机真实截图：系统通知横幅来自实际「回复完成」事件；其余为设置页「内置插件 → 消息通知」标签的真实界面。
 
 ## 配置
 
