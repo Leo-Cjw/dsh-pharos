@@ -209,7 +209,7 @@ const count = (title) => notifications.filter((x) => x.title === title).length;
 
 apply(ctx);
 console.log('bundle name/inject:', name, JSON.stringify(inject));
-assert(window.__dshPharos?.version === '0.4.1', '控制台 API 更名为 __dshPharos v0.4.1');
+assert(window.__dshPharos?.version === '0.4.2', '控制台 API 更名为 __dshPharos v0.4.2');
 
 // baseline
 assert(notifications.length === 0, '基线不弹');

@@ -1,6 +1,6 @@
 {
   "name": "dsh-pharos",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "DSH 桌面守望提醒插件（v0.4：host 桥 + 浏览器双半）。模型需要你操作（审批/方案确认/提问）或回复在后台完成时提醒你；v0.4 新增出错/中断/上限通知、SSE 帧桥、Webhook（企微/飞书/钉钉/通用）、远程触发、安静时段、子代理过滤与设置页。Pharos lighthouse for DeepSeek Harness — alerts you when the agent needs your input or a reply finishes in the background, now with error/interrupt/limit alerts, SSE bridge, webhooks, remote trigger, quiet hours, and a settings tab.",
   "license": "MIT",
   "repository": {
