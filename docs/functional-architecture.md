@@ -180,9 +180,20 @@ interface PharosEvent {
 6. **回归**：v0.3 全部能力保留（浏览器直接订阅仍为首选路径，SSE 作为 host 事件补充通道，二者在策略层汇合）。
 
 ### M2 — 统计与定制（v0.5.0，按需）
-- token/TPS/耗时/次数统计：`session/event` usage 聚合（host）+ 官方 `tokenUsage`/`sessionStats` 投影（缓存命中率/TPS，与 dsh-web-ui 同口径），**对齐 session-notify"当轮统计、不落累计库"**；设置页统计卡片 + 通知折叠行占位符 `{duration}{usage}{cache}{tps}`。
-- webhook 模板变量（`{title}{kind}{note}{tokens}{duration}{sessionUrl}{time}`）、自定义渠道条数上限、失败重试与回放。
-- workflow 级通知细分（phase/agent-start/agent-end 卡片）；错误严重度分级音效。
+
+**A 组（统计）已落地（v0.5.0，2026-10-03）**，落地细节见 [m2-plan.md](m2-plan.md)：
+- **当轮统计投影**（`lib/host/stats.js`）：`turn/start` 存基线 snapshot → `turn/end` 做差，得到
+  当轮缓存命中率（`cacheReadΔ/(uncachedΔ+cacheReadΔ+cacheWriteΔ)`）、TPS（`decodeTokensΔ/decodeMsΔ`）、
+  tokens（投影 delta 优先、`turnState` 兜底）。命中率/TPS 分母 0 → null（不显示「0%」）。
+- **帧扩展**：`PharosEvent` 增 `cacheHitRate`/`tps` 可选字段；`noteFor` 支持统计插值。
+- **浏览器展示**：`installApi().stats()` + `pharos:stats` CustomEvent + `localStorage['dshPharos.stats']` 兜底；
+  设置页「当轮统计」卡片 + Debug 统计栏；`test(kind, stats)` 扩展。
+- **降级**：`sessionProjections` 不可用 / 基线缺失 → 静默降级 v0.4（仅耗时+tokens）。
+
+**B 组（webhook 模板定制）**：`renderTemplate` 已在 M1 落地（9 变量），B-1 剩 `{cache}{tps}` 两 token
+（`{sessionUrl}` 已核实无会话路由、删除），B-2「手动重放」拆出单独评估——**均未在本轮落地**。
+
+**C 组（不做）**：workflow 级通知细分、累计统计库、错误严重度分级音效——延后。
 
 ---
 

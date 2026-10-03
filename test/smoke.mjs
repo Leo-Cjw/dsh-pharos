@@ -137,6 +137,11 @@ function reload(overrides = {}) {
     getElementById: global.document.getElementById,
     queryBody: global.document.queryBody,
     bodyChildren: global.document.bodyChildren,
+    // M2：document 级事件（pharos:stats）——模拟真实 document 的 add/remove/dispatch
+    _listeners: new Map(),
+    addEventListener(ev, fn) { const a = this._listeners.get(ev) ?? []; a.push(fn); this._listeners.set(ev, a); },
+    removeEventListener(ev, fn) { const a = this._listeners.get(ev) ?? []; this._listeners.set(ev, a.filter((f) => f !== fn)); },
+    dispatchEvent(ev) { const a = this._listeners.get(ev?.type) ?? []; for (const fn of [...a]) fn(ev); return true; },
   };
   const win = {
     localStorage,
@@ -165,6 +170,8 @@ function reload(overrides = {}) {
     Promise, Math, JSON, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, WeakMap, WeakSet,
     Uint8Array, TextEncoder, Blob, URL, URLSearchParams,
     Date: overrides.DateCtor ?? Date, crypto,
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
+    Event: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
   };
   Object.defineProperty(ctxObj, 'globalThis', { value: ctxObj });
   const context = vm.createContext(ctxObj);
@@ -209,7 +216,7 @@ const count = (title) => notifications.filter((x) => x.title === title).length;
 
 apply(ctx);
 console.log('bundle name/inject:', name, JSON.stringify(inject));
-assert(window.__dshPharos?.version === '0.4.2', '控制台 API 更名为 __dshPharos v0.4.2');
+assert(window.__dshPharos?.version === '0.5.0', '控制台 API 更名为 __dshPharos v0.5.0');
 
 // baseline
 assert(notifications.length === 0, '基线不弹');
@@ -586,6 +593,50 @@ if (!m1Ready) {
     const hostSrc = fs.readFileSync(new URL('../lib/host/routes.js', import.meta.url), 'utf8');
     const wireEvent = /event:\s*([A-Za-z0-9_-]+)/.exec(hostSrc)?.[1];
     m1a(typeof wireEvent === 'string' && es?.namedListeners?.has(wireEvent), `契约锁：client 注册的事件名与 host 写出的一致（${wireEvent}）`);
+  }
+
+  // ---- M2-A: test(kind, stats) 扩展 + stats() 访问器 + localStorage 兜底 ----
+  {
+    localStorage.removeItem('dshPharos.config');
+    localStorage.removeItem('dshPharos.stats');
+    const r = m1Reload({ bag: { pageFocus: false } });
+    global.EventSource.instances.length = 0;
+    m1Apply(r);
+    const api = r.context.window.__dshPharos;
+    m1a(typeof api.stats === 'function', 'installApi 暴露 stats() 访问器');
+    m1a(api.stats() === null, '初始无统计 → stats() 返回 null');
+    // test('done', { stats }) 传入可选统计 → stats() 可读 + localStorage 兜底
+    api.test('done', { tokens: 240, durationMs: 12345, cacheHitRate: 0.142, tps: 13.3 });
+    await m1Wait(40);
+    const st = api.stats();
+    m1a(st !== null && typeof st === 'object', 'test(kind, stats) 后 stats() 非 null');
+    m1a(st && st.tokens === 240, 'stats().tokens 透传（投影 delta）');
+    m1a(st && Math.abs(st.cacheHitRate - 0.142) < 1e-9, 'stats().cacheHitRate 透传');
+    m1a(st && Math.abs(st.tps - 13.3) < 1e-9, 'stats().tps 透传');
+    const persisted = JSON.parse(localStorage.getItem('dshPharos.stats') || 'null');
+    m1a(persisted && persisted.tokens === 240, 'localStorage dshPharos.stats 兜底已写');
+    // P1-1：通知正文含统计文本（test 路径 done 分支把 statsSummaryOf 织进 summary）
+    const body = r.bag.notifications.at(-1)?.body ?? '';
+    m1a(body.includes('缓存命中 14%') && body.includes('13.3 tok/s'), 'test(kind, stats) 通知正文含统计文本');
+  }
+
+  // ---- M2-B: SSE 帧带统计字段 → stats 更新 + pharos:stats 事件 ----
+  {
+    localStorage.removeItem('dshPharos.config');
+    localStorage.removeItem('dshPharos.stats');
+    const r = m1Reload({ bag: { pageFocus: false } });
+    global.EventSource.instances.length = 0;
+    m1Apply(r);
+    const es = r.ES.instances.at(-1);
+    const api = r.context.window.__dshPharos;
+    let statEvent = null;
+    r.context.document.addEventListener('pharos:stats', (ev) => { statEvent = ev.detail; });
+    es.dispatch(m1Frame('done', 'S1', '', { tokens: 300, durationMs: 8000, cacheHitRate: 0.5, tps: 25 }), 'pharos');
+    await m1Wait(40);
+    const st = api.stats();
+    m1a(st && st.tokens === 300, 'SSE 帧带 tokens → stats().tokens 更新');
+    m1a(st && Math.abs(st.cacheHitRate - 0.5) < 1e-9, 'SSE 帧带 cacheHitRate → stats().cacheHitRate 更新');
+    m1a(statEvent && statEvent.tokens === 300, 'SSE 帧带统计 → 派发 pharos:stats CustomEvent');
   }
 }
 

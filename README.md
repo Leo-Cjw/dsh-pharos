@@ -10,7 +10,7 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 | --- | --- | --- |
 | 🔔 **需要你操作** — 审批请求 / 方案待确认（plan-review）/ 提问 | 系统通知 + 提示音 + 标题前缀 `🔔 需要你 · ` | 全时提醒；当前会话 + 页面在前台时**静默只留标题标记**（审批卡片本来就在眼前） |
 | ⏳ **仍未处理** — 上面的待办 10 分钟没处理 | 补发一次系统通知 + 提示音，正文带「（仍未处理）」 | 每次请求至多补发一次，处理掉即撤销 |
-| ✅ **回复完成** — 会话运行结束（含切走后完成的） | 系统通知 + 双音提示音 + **耗时小结**（「耗时 12 秒」） | 仅页面隐藏/后台时提醒 |
+| ✅ **回复完成** — 会话运行结束（含切走后完成的） | 系统通知 + 双音提示音 + **耗时小结**（「耗时 12 秒」）+ **当轮统计**（token 用量 / 缓存命中率 / TPS，v0.5 来自官方投影当轮 delta） | 仅页面隐藏/后台时提醒 |
 | ❌ **运行出错** — agent 执行异常（`turn/end reason.kind=error`，`agent/error` 双轨兜底） | 系统通知 + **重低音三音** | 全时（v0.4，受 quiet hours / 过滤约束） |
 | ✂️ **被中断 / ⛽ 达到上限** — interrupted / limit | 系统通知 + 中音警示 | 全时（v0.4） |
 | 🛠️ **后台任务事件** — jobEvents（任务结束/移除） | 系统通知 | 默认开启，可关（v0.4） |
@@ -41,6 +41,7 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，落盘 `<profile>/pharos.json`，设置页改）；host 不在线时回退浏览器偏好（`localStorage` 键 `dshPharos.config`），控制台实时生效：
 
 设置页位于 **设置 → 插件 → dsh-pharos → 「消息通知」**（v0.4：React 渲染，`settings.plugins.tab` 槽位），覆盖全部配置项，另含：
+- **当轮统计卡片**（v0.5）：展示最近一轮的耗时 / tokens / 缓存命中率 / TPS（host 官方投影当轮 delta；无统计时隐藏）
 - **Webhook 渠道管理**：增删多渠道（企微/飞书/钉钉加签 + 通用透传），保存即生效
 - **免打扰时段**（跨午夜）、**子代理过滤**、**apiToken** 管理（`***` 掩码=保留、`""`=清除）
 - **一键测试按钮**：完成 / 需要你 / 出错 / 中断 / 上限 / 远程（走本地 deliver；`configApi` 缺失时远程类回退 `POST /trigger`）
@@ -69,9 +70,11 @@ window.__dshPharos.setConfig({
   webhooks: []                 // 出站 webhook 渠道配置（设置页管理）
 })
 window.__dshPharos.resetConfig()      // 恢复默认
+window.__dshPharos.stats()            // 最近一轮当轮统计（{durationMs,tokens,cacheHitRate,tps,...}；无则 null）
 window.__dshPharos.test("attention")  // 测试「需要你」
 window.__dshPharos.test("done")       // 测试「回复完成」
 window.__dshPharos.test("error")      // 测试「运行出错」（0.4；另支持 interrupted / limit / remote）
+window.__dshPharos.test("done", { tokens: 240, cacheHitRate: 0.5, tps: 13.3 }) // 带可选统计参（v0.5）
 window.__dshPharos.debug()
 // 诊断要点：configSource（server=host 在线）/ sse（'open'|'connecting'|'error'）/
 // framesReceived + lastFrameAt（SSE 帧计数——sse:'open' 但 framesReceived 恒 0 = 通道未通的可判定信号）
@@ -159,6 +162,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 - Electron 页面通知需允许 DeepSeek Harness 的系统通知权限（macOS：系统设置 → 通知）。
 - 首次页面加载后的第一声需要页面上有过一次用户交互（浏览器自动播放策略）。
 - 出错/被中断/达到上限依赖 reason.kind 在 `turn/end` 上的出现（0.2.0-rc.2 已见 interrupted/forked；更全的 kind 集合随运行时演进，未知 kind 静默降级由 `agent/error` 等兜底）。
+- 当轮统计（缓存命中率/TPS）依赖 host 半的官方投影 `ctx.sessionProjections`（`tokenUsage`/`sessionStats`）；投影不可用或插件中途启用（无 turn/start 基线）时静默降级为「仅耗时+tokens」，不报错。
 - 点通知"打开对应会话"为 best-effort（`sessions.binding(id)?.session.open()`），失败时仅聚焦窗口。
 - 宿主原生 osascript 通知（`hostNotify`）为 M1.5 预留，本轮未实现；webhook 需自行配置渠道（企微/飞书/钉钉机器人）。
 

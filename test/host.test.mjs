@@ -38,11 +38,12 @@ const importFresh = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 let hostMod = null;
 try { hostMod = await importFresh('lib/host.js'); }
 catch { hostMod = await importFresh('lib/index.js'); }
-let frames = null, store = null, webhook = null, routes = null;
+let frames = null, store = null, webhook = null, routes = null, stats = null;
 try { frames = await importFresh('lib/host/frames.js'); } catch { /* optional */ }
 try { store = await importFresh('lib/host/store.js'); } catch { /* optional */ }
 try { webhook = await importFresh('lib/host/webhook.js'); } catch { /* optional */ }
 try { routes = await importFresh('lib/host/routes.js'); } catch { /* optional */ }
+try { stats = await importFresh('lib/host/stats.js'); } catch { /* optional */ }
 
 const apply = hostMod.apply ?? hostMod.default?.apply;
 console.log('host entry:', Object.keys(hostMod).join(','));
@@ -787,7 +788,125 @@ if (frames) {
   } finally { unfreezeDate(); }
 }
 
-// ---- 16. rate limit 常量 + host 默认 ----
+// ---- 16. M2 stats：投影做差 / 命中率 / TPS / 读取降级 ----
+if (!stats) {
+  console.log('skip : lib/host/stats.js 未加载，跳过 M2 stats 白盒断言');
+} else {
+  const snap = (tu, ss) => ({ values: { tokenUsage: tu, sessionStats: ss } });
+  const tu = (u, o, cr, cw) => ({ uncachedInputTokens: u, outputTokens: o, cacheReadTokens: cr, cacheWriteTokens: cw });
+
+  // diffProjection：四桶 + decode 做差，负值钳 0
+  const base = snap(tu(100, 50, 20, 10), { decodeTokens: 50, decodeMs: 5000 });
+  const cur = snap(tu(200, 150, 40, 30), { decodeTokens: 150, decodeMs: 12500 });
+  const delta = stats.diffProjection(base, cur);
+  assert(delta !== null, 'diffProjection 基线+当前 → 非 null');
+  assert(delta.tokenUsage.uncachedInputTokens === 100, '当轮 uncachedInputTokens delta=100');
+  assert(delta.tokenUsage.outputTokens === 100, '当轮 outputTokens delta=100');
+  assert(delta.tokenUsage.cacheReadTokens === 20, '当轮 cacheReadTokens delta=20');
+  assert(delta.tokenUsage.cacheWriteTokens === 20, '当轮 cacheWriteTokens delta=20');
+  assert(delta.sessionStats.decodeTokens === 100, '当轮 decodeTokens delta=100');
+  assert(delta.sessionStats.decodeMs === 7500, '当轮 decodeMs delta=7500');
+
+  // 负值钳 0（重复上报鲁棒：current 某桶小于 baseline）
+  const neg = stats.diffProjection(base, snap(tu(90, 40, 10, 5), { decodeTokens: 30, decodeMs: 3000 }));
+  assert(neg.tokenUsage.uncachedInputTokens === 0, '负增量钳 0（uncachedInput）');
+  assert(neg.sessionStats.decodeTokens === 0, '负增量钳 0（decodeTokens）');
+
+  // 基线/当前任一为 null → null（静默降级）
+  assert(stats.diffProjection(null, cur) === null, '基线 null → diffProjection 返回 null');
+  assert(stats.diffProjection(base, null) === null, '当前 null → diffProjection 返回 null');
+
+  // cacheHitRateOf：cacheReadΔ / (uncachedΔ+cacheReadΔ+cacheWriteΔ)；分母 0 → null
+  const hit = stats.cacheHitRateOf(delta.tokenUsage);
+  assert(Math.abs(hit - (20 / (100 + 20 + 20))) < 1e-9, '命中率 = 20/140（当轮 delta 口径）');
+  assert(stats.cacheHitRateOf(tu(0, 0, 0, 0)) === null, '分母 0 → 命中率 null（不显示 0%）');
+  assert(stats.cacheHitRateOf(null) === null, 'tokenUsage null → 命中率 null');
+
+  // tpsOf：decodeTokensΔ / (decodeMsΔ/1000)；decodeMs 0 → null
+  const tps = stats.tpsOf(delta.sessionStats);
+  assert(Math.abs(tps - (100 / 7.5)) < 1e-9, 'TPS = 100/(7500/1000)（当轮 delta 口径）');
+  assert(stats.tpsOf({ decodeTokens: 100, decodeMs: 0 }) === null, 'decodeMs 0 → TPS null');
+  assert(stats.tpsOf(null) === null, 'sessionStats null → TPS null');
+
+  // totalTokensOf：四桶 delta 之和
+  assert(stats.totalTokensOf(delta.tokenUsage) === 240, '当轮总 token = 100+100+20+20=240');
+
+  // 一致性：投影 delta 四桶和 = frames.usageTokensOf 的同形累加（交叉验证 A-1）
+  // （两者同公式：都是四桶求和；此处用同一份 delta 验证 totalTokensOf 与手算一致）
+  const manual = delta.tokenUsage.uncachedInputTokens + delta.tokenUsage.outputTokens + delta.tokenUsage.cacheReadTokens + delta.tokenUsage.cacheWriteTokens;
+  assert(stats.totalTokensOf(delta.tokenUsage) === manual, 'totalTokensOf 与手算四桶和一致（交叉验证）');
+
+  // readProjectionSnapshot：service 缺失 / snapshot 缺失 / session 缺失 → null（永不 throw）
+  assert(stats.readProjectionSnapshot({ get: () => undefined }, { id: 'S' }) === null, 'sessionProjections 缺失 → null');
+  assert(stats.readProjectionSnapshot({ get: (n, f) => ({}) }, { id: 'S' }) === null, 'snapshot 非函数 → null');
+  assert(stats.readProjectionSnapshot({ get: (n, f) => ({ snapshot: () => null }) }, { id: 'S' }) === null, 'snapshot 返回 null → null');
+  assert(stats.readProjectionSnapshot({ get: () => ({ snapshot: () => snap(tu(1, 2, 3, 4), {}) }) }, null) === null, 'session null → null');
+  // 正常路径：返回 snapshot 原值
+  const proj = { snapshot: () => ({ values: { tokenUsage: tu(1, 2, 3, 4), sessionStats: {} } }) };
+  const got = stats.readProjectionSnapshot({ get: (n, f) => proj }, { id: 'S' });
+  assert(got !== null && got.values.tokenUsage.uncachedInputTokens === 1, 'readProjectionSnapshot 正常读取');
+  // get 抛异常 → null（不 throw）
+  assert(stats.readProjectionSnapshot({ get: () => { throw new Error('boom'); } }, { id: 'S' }) === null, 'ctx.get 抛异常 → null');
+}
+
+// ---- 16b. M2 黑盒：apply() 经 sessionProjections 驱动当轮统计（deriveTurnStats → 帧）----
+{
+  // 脚本化投影 stub：turn/start 读到基线（累计 100），turn/end 前把累计推到 240，
+  // 断言帧带当轮 delta 派生的 cacheHitRate/tps/tokens 与 note 统计文本。
+  let cumulative = { uncachedInputTokens: 100, outputTokens: 50, cacheReadTokens: 20, cacheWriteTokens: 10, decodeTokens: 50, decodeMs: 5000 };
+  const projections = {
+    snapshot: () => ({
+      values: {
+        tokenUsage: { uncachedInputTokens: cumulative.uncachedInputTokens, outputTokens: cumulative.outputTokens, cacheReadTokens: cumulative.cacheReadTokens, cacheWriteTokens: cumulative.cacheWriteTokens },
+        sessionStats: { decodeTokens: cumulative.decodeTokens, decodeMs: cumulative.decodeMs },
+      },
+    }),
+  };
+  const { ctx, disposer } = setup();
+  ctx.provide('sessionProjections', projections);
+  const { res, done } = openStream(ctx);
+  await done;
+  const sess = { id: 'S1', header: {} };
+  fireSessionEvent(ctx, { type: 'turn/start', session: sess });
+  // turn/end 前推进累计：当轮 delta = uncachedInput +100 / output +100 / cacheRead +20 / cacheWrite +20 / decodeTokens +100 / decodeMs +7500
+  cumulative = { uncachedInputTokens: 200, outputTokens: 150, cacheReadTokens: 40, cacheWriteTokens: 30, decodeTokens: 150, decodeMs: 12500 };
+  fireSessionEvent(ctx, { type: 'turn/end', reason: { kind: 'completed' }, session: sess });
+  await wait(60);
+  const fs_ = sseFrames(res);
+  assert(fs_.length >= 1, '带投影的 completed turn/end 产出帧');
+  const f = fs_.find((x) => x.kind === 'done');
+  assert(!!f, '找到 done 帧');
+  if (f) {
+    // 当轮 delta：uncachedInput 100 / output 100 / cacheRead 20 / cacheWrite 20 → 命中率 20/(100+20+20)=1/7；tokens=240
+    assert(typeof f.cacheHitRate === 'number' && Math.abs(f.cacheHitRate - (20 / 140)) < 1e-9, '帧 cacheHitRate = 当轮 delta 命中率 20/140');
+    assert(typeof f.tps === 'number' && Math.abs(f.tps - (100 / 7.5)) < 1e-9, '帧 tps = 当轮 delta 100/(7500/1000)');
+    assert(f.tokens === 240, '帧 tokens = 当轮 delta 四桶和 240');
+    assert(typeof f.note === 'string' && f.note.includes('缓存命中') && f.note.includes('tok/s'), 'note 含统计文本（缓存命中 + tok/s）');
+  }
+  disposer();
+}
+
+// ---- 16c. M2 黑盒：基线缺失 → 帧无统计字段（静默降级）----
+{
+  // 不提供 sessionProjections（或 snapshot 不可用）：turn/start 基线为 null → 帧无 cacheHitRate/tps
+  const { ctx, disposer } = setup();
+  const { res, done } = openStream(ctx);
+  await done;
+  const sess = { id: 'S2', header: {} };
+  fireSessionEvent(ctx, { type: 'turn/start', session: sess });
+  fireSessionEvent(ctx, { type: 'turn/end', reason: { kind: 'completed' }, session: sess });
+  await wait(60);
+  const fs_ = sseFrames(res);
+  const f = fs_.find((x) => x.kind === 'done' && x.sessionId === 'S2');
+  assert(!!f, '无投影时 completed turn/end 仍产出 done 帧');
+  if (f) {
+    assert(!('cacheHitRate' in f), '基线缺失 → 帧无 cacheHitRate');
+    assert(!('tps' in f), '基线缺失 → 帧无 tps');
+  }
+  disposer();
+}
+
+// ---- 17. rate limit 常量 + host 默认 ----
 {
   assert(hostMod.HOST_DEDUPE_MS === 3000, 'host 导出 HOST_DEDUPE_MS=3000');
 }
