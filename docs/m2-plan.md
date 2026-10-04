@@ -5,6 +5,15 @@
 > 关键数据源（`sessionProjections` / `tokenUsage` / `sessionStats`）已在本运行时
 > 打包产物（`/Applications/DeepSeek Harness.app/Contents/Resources/app.asar`）里**逐行核实**，
 > 非文档转述。核实见 §附录。
+
+> ## ✅ 实施结果（2026-10-04）
+> **A 组（统计）已落地并通过实机验收**，详见 commit `259d918`：
+> - `lib/host/stats.js`（投影做差/命中率/TPS/读取）＋ host.js 基线做差 + frames.js 帧扩展
+>   + client/settings-view 统计卡片 + test(kind,stats)。
+> - 测试：host 155→164（白盒 25 + 黑盒 9）、smoke M1 65→66。
+> - 实机验收：版本徽章 v0.5.0、通知正文统计文本、设置页「当轮统计」卡片、
+>   localStorage 兜底（重启后数据仍在）全部通过。
+> **B 组（webhook `{cache}{tps}` 两 token）未做**；C 组（workflow 细分/累计库/分级音效）不做。
 >
 > **draft-2 修订记录**（评审发现并已消化，见 §附录 B）：
 > 1. 🔴 修正核心口径偏差：投影值是**会话累计**，不是「当轮」——改为 `turn/start` 存基线 +
