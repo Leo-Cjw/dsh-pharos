@@ -9,7 +9,8 @@
 1. host 半实装：订阅 host 事件 → 归一定类 → 构造 PharosEvent 帧 → 双通道（SSE 广播 + webhook 推送）。
 2. webServer 同源路由（prefix `/pharos/api`）：SSE stream / trigger / config GET·PUT / webhooks GET。
 3. 浏览器半：保留 v0.3 全部能力；新增消费 SSE 帧（done/error/interrupted/limit/job/remote）；新音型与新文案；quiet hours；子代理过滤；DOM toast 兜底；跨标签页去重（Web Locks）；测试按钮扩展。
-4. 设置页：`settings.plugins.tab` 槽位（React 视图，React 获取方式见 §7 冲刺项）。
+4. 设置页：`settings.section` 顶级分区（React 视图，React 获取方式见 §7 冲刺项）。
+   - **2026-10-05 修订**：原定为 `settings.plugins.tab`（「内置插件」分区内标签页），已迁移，理由见 §10。
 5. 测试：test/smoke.mjs 扩展 + 新增 test/host.test.mjs。
 
 **不做（明确排除）**：宿主原生 osascript 通知（hostNotify 配置位预留但默认关，不进本轮实现）、IM 推送、自定义音效上传、M2 统计、workflow 级细分、per-session 标记"已读"联动。
@@ -111,14 +112,15 @@ const DEFAULT_CONFIG = {
 - `session/event`：`ctx.on('session/event', (session, event) => …)`；`turn/end event.data = {turn, reason:{kind}}`（dsh-session:791 产出；本运行时已见 kind∈{interrupted,forked}，complete/error 等由 agent-loop 的 turn/end 补充——**实现时对未知 kind 静默降级**）。
 - `agent/error {turn,step,error}`、`agent/turn-stopping {turn,signal}`、`agent/request-error {turn,step,provider,failure,retryPolicy,signal}`（dsh-agent-loop）。
 - job 事件：`ctx.jobs.events.subscribe({owners:'scope'}, e => …)`；e.type∈settled/removed；job.status∈running/stopping/completed/killed/failed（dsh-tool-jobs）。
-- 设置页槽位：**`settings.plugins.tab`** 本机存在（dsh-client-ui-settings-plugins 渲染 per-plugin row）；`settings.section` 不存在。
+- 设置页槽位：`settings.section`（顶级分区）与 `settings.plugins.tab`（「内置插件」分区内标签页）**两个槽本机都存在**。
+  - **原记「`settings.section` 不存在」有误（2026-10-05 复核）**：查错了包 —— 槽位声明方是 `@deepseek-ai/dsh-client-ui-settings-general/lib/client.js:1137-1140`（`"settings.section": { kind: "list", scope: "root" }`），导航投影在同文件 `:1017-1040`（`slots.entries("settings.section")` → `sort(order)`）、渲染在 `:338`（`renderSlot("settings.section", { close }, { only: active })`）。`dsh-client-ui-settings` 只提供底座与配置表单，本身不声明该槽。详见 §10。
 - 跳会话：`sessions.binding(id)?.session.open()` 存在（api-session-controller client.js:1857/3110/3400）；`sessions.open(id)` 不存在。
 - 服务注入：host `ctx.inject(['webServer'], cb)`、`ctx.get(name, false)` 惰性查；client 插件**必须把读取的服务全部声明进 inject**——cordis 上下文代理对未声明服务的直接属性读（`ctx.sessions` / `ctx.uiSession` / `ctx.slots`）抛 `cannot get property X without inject`（0.2.0-rc.2 实测，dsh-notify-me lib/client.js:20-21 同款教训）；本插件声明 `["sessions", "uiSession", "slots"]`，且 apply 永不外抛（避免 cordis 上报 `web boot: … did not activate` 触发 fail-loud 恢复流程重写 profile 补丁）。服务按树序激活可能晚于本条目，apply 用 500ms×60 重试延迟接管（照 dsh-notify-me）。
 
 **需冲刺核实（实现成员开工前 30-60min 内查源码定案）**：
 1. **React 获取（pharos-settings）**：在浏览器 bundle 里怎么拿到 react？查 `/Users/mia/.dsh/profiles/desktop/node_modules/dshmarket/client/client.js`（其设置视图用的 React import 方式）与 `/tmp/dsh-checkout/node_modules/@deepseek-ai/dsh-cordis-client-runner/lib/client.js`（slots.register 契约：返回 React element 还是别的）。结论三选一：(a) `require('react')` 可用 → 直接 import；(b) runner 提供全局 React → 用之；(c) 都不行 → 视图用纯 DOM 构造并确认 register 能收非 React 渲染产物，否则把设置页降级标记 M1.5。**最终以 (a) 优先——dshmarket 设置页即 React（peer 声明 react ^18||^19 无 @deepseek-ai 门禁）。**
 2. **profileDir（pharos-host）**：仿 dshmarket/lib/profile.js 的解析：`env.DSH_HOME || ~/.dsh` + `/profiles/<name>/`；profile name 取 `ctx.get('profileContext')`（launched.name 优先，回退 'desktop'）；落盘 `<profileDir>/pharos.json`。若 profileContext 拿不到 → 回退 `~/.dsh/pharos.json`。实现时给出你在本机验证到的实际路径。
-3. **slot id 与「设置→插件」行的匹配（pharos-settings）**：照 my-notify `slots.register({name:'settings.plugins.tab', id:'pharos-settings', order:60, label:'消息通知'})`；id 是否须为条目 id 待实测（风险项已在架构文档 §7 列出，本轮以 my-notify 同名写法为准）。
+3. ~~**slot id 与「设置→插件」行的匹配（pharos-settings）**~~ —— **2026-10-05 已定案，见 §10**：改用顶级 `settings.section`；`id` 无需等于插件条目 id（实测自由 id：dshmarket `market`、官方 inventory `all`、turn-notify `turn-notify`）。
 
 ## 8. 测试
 
@@ -129,3 +131,82 @@ const DEFAULT_CONFIG = {
 ## 9. 集成（Integrator/Lead 执行，成员不碰）
 
 版本 0.3.0→0.4.0；package.json 增补 exports/files（含 lib/host* 若拆分）、peerDependencies `react: "^18.2.0 || ^19.3.0"`（仅设置页需要时）、scripts.test 跑两个测试；README 更新；同步 `local-plugins/dsh-pharos` 与 `node_modules/dsh-pharos`；提交；提示用户重启验证。
+
+## 10. 修订（2026-10-05）：设置页从 `settings.plugins.tab` 迁到 `settings.section`
+
+### 10.1 起因：M1 的槽位判定查错了包
+
+M1 认定「`settings.section` 不存在」，据此选了 `settings.plugins.tab` 并在 §7 记为已核实事实。复核（0.2.0-rc.2 运行时源码）表明该判定有误 —— 当时查的是 `@deepseek-ai/dsh-client-ui-settings`，而该槽的**声明方是 `@deepseek-ai/dsh-client-ui-settings-general`**：
+
+| 事实 | 位置 |
+|---|---|
+| 槽位声明 `{ kind: "list", scope: "root" }` | `dsh-client-ui-settings-general/lib/client.js:1137-1140` |
+| 导航投影（`slots.entries("settings.section")` → `sort(order)`） | 同文件 `:1017-1040` |
+| 分区渲染（`renderSlot("settings.section", { close }, { only: active })`） | 同文件 `:338` |
+| 「内置插件」壳：注册 `settings.section`(id `plugins`, order 15) + 声明子槽 `settings.plugins.tab` | `dsh-client-ui-settings-plugins/lib/client.js:203-212` |
+
+**注意：本项目自己的调研早已给出正确答案，却被相反的结论覆盖** ——
+- `docs/research/notify-me-analysis.md:147-153`：dsh-notify-me 用 `settings.section`，id `dsh-notify-me`，order 45，并写明「官方 dsh-client-ui-settings-account、dsh-client-ui-agent-preset 用的正是同一 API，**已在 0.2.0-rc.2 bundle 里验证**」。
+- `docs/research/turn-notify-analysis.md:45`：dsh-turn-notify 用 `settings.section`，id `turn-notify`，order 41。
+- 另有 `docs/research/session-notify-analysis.md:95`：session-notify 用 keyed slot `settings.plugin.item`（更早宿主线）。
+
+→ 故 `functional-architecture.md` 曾记的「notify-me 的 settings.section 是旧宿主写法」不成立，已一并更正。
+
+### 10.2 层级依据（为什么顶级而不是分区内标签页）
+
+- `settings.section` = **功能/产品域**设置（账号 · 通用 · 模型 · Agent 预设 · 插件市场 · 侧边卡片）。
+- `plugins.*` = **插件管理域**（清单 · 组合包 · 行 · 包自身配置）。
+- 本插件设置页配的是**通知行为**（音效 · 免打扰 · 过滤 · Webhook 渠道），属前者。
+- **同域先例**：`dsh-better-sidebar`（第三方功能型插件，order 100）只注册 `settings.section` 一个座位。
+- **不注册第二个座位**：`plugins.bundle.config`（键 = 组合包名）是官方给「组合包自己的配置」的座位；本插件没有包自身运维内容（版本 / 更新通道 / 线路 / 卸载），故不注册。对照 dshmarket 多占座位，是因为它的卡片内容**正是**包自身运维。
+
+### 10.3 落地参数
+
+| 项 | 值 |
+|---|---|
+| `SLOT_NAME` | `settings.section` |
+| `SLOT_ID` | `pharos-notifications` |
+| `SLOT_ORDER` | `30` |
+| `SLOT_LABEL` | `消息通知` |
+
+order 实测占用：general `0` / models `10` / plugins `15` / agent-presets `20` / market `40` / better-sidebar `100`（在野：turn-notify `41`、notify-me `45`）—— `30` 与全部现有值不冲突。
+视图新增自绘标题 `.pharos-title`（16px / weight 500 / line-height 24，对齐 `ui-settings-models` 的 `.title` 与 dshmarket 的 `.title`）：**顶级分区的壳不画标题**（对照官方 `PluginsSettingsSection` 自绘 `<h2>`），而标签页形态下标题由分区壳 + 标签提供。
+
+### 10.4 图标（2026-10-05 已落地，v0.5.1）
+
+标记：**三形状灯塔**（实心灯头 + 灯台横条 + 收分空心塔身），不画光束（发丝细条在 16px 下会糊成脏点）。配色：灯头琥珀 `#F59E0B` + 塔身 DSH 蓝 `#3B7BF6`。
+
+**形状语言必须与宿主一致**（第一版栽在这里，实测返工）：`@deepseek-ai/dsh-client-ui-primitives` 的 artwork 统一是 `viewBox="0 0 16 16"` + `fill="none"` + 每形状 `stroke="currentColor"`，导航取 `ICON_MEDIUM_STROKE = 1.3`，`strokeLinecap/Linejoin = round`。故标记也按 **16 网格描边**绘制，灯头仍为实心（16px 下 1.3 描边圆的心孔会塌成亚像素、糊成一坨）。灯台横条用 1.5 略重以在 16px 下压得住。
+
+第一版（36 网格 + 填色剪影 + 不设 `fill`）有两处缺陷，均由截图证实：
+1. **没设 `fill`** → SVG 默认填黑 → 深色主题下几乎不可见（浅色下是一团黑斑）。
+2. **填色式剪影**与邻座轮廓图标语言不搭，且缩到 16px 后三块糊成一条 4px 宽的竖线。
+
+**几何验证方式**：不靠"看一眼"，改用**栅格化数值验证**（按 SVG 真实渲染模型填充/描边，超采样后输出 ASCII 覆盖率图，4×4 超采样）。据此淘汰了收腰塔身（像花瓶）与圆顶灯室（顶部糊成一团）。放大侧结论：纯等比放大、**描边权重不做补偿**时 36px 下结构依然清晰；试过提到 2.2，灯头与灯台会粘在一起、整块糊成墩子 —— 故权重固定 1.3/1.5。
+
+宿主实测的图标面（`ui-plugin-manager` 的 `PackageArtwork`，`object-fit: contain`，不裁切）：
+
+| 消费面 | 尺寸 | 机制 | 状态 |
+|---|---|---|---|
+| 侧栏「插件」页 组合包卡片 | 36 | `pkg.meta.icon` ← `package.json` 的 `icon` | ✅ 根目录 `icon.svg` |
+| 组合包详情页顶部 | 36 | 同上 | ✅ 同上 |
+| 组合包内组件行 | 30 | `row.meta.icon`（解析到同一包 package.json） | ✅ 同上 |
+| 设置导航「消息通知」 | 16 | `settings.section` **无 icon 字段** | ✅ `installSettingsNavIcon()` |
+| 设置 → 内置插件 →「插件列表」卡片 | — | **不渲染图标**（该包 0 处 icon） | 无需处理 |
+| 插件市场（dshmarket）已安装列表 | — | 不读 `meta.icon`，用市场自己的 catalog 资源 | 控不了 |
+
+同机先例：`dsh-better-sidebar`（`"./icon.svg"`）、`dsh-context` / `dsh-client-ui-skill-explorer`（`"icon.svg"`）都是「根目录 svg + `files` 列出 + `package.json.icon` 指向」。故照此办理，`files` 已加 `icon.svg`（`npm pack --dry-run` 确认入包）。
+
+导航图标的实现与 dshmarket 不同：它注一张 CSS 样式表、用 `::before` + `mask` 画；本插件**直接换节点** —— `currentColor` 由外壳 `.navCell` 的 `color` 继承，插入的 svg 无需自带颜色，少一个 `<style>` 注入点。认领方式是按 `.navLabel` 文本比对（外壳的 nav 按钮没有 id/data 属性可挂），配一个只订阅 `childList` 的 `MutationObserver` 补挂（设置对话框按需打开）。DOM 结构若变导致找不到 svg，则**保持齿轮不换**（宁可不换，不破坏外壳）。
+
+**防漂移**：几何的唯一真源是 `icon.svg`，`lib/settings-view.js` 的 `PHAROS_MARK_*` 是其副本，`test/smoke.mjs` 的 M1-I 段有 **6 条**静态断言锁住（形状数 / 两条路径内联 / 灯头几何 / viewBox 16 网格 / 描边式契约 / 描边权重）。已两次反向验证：改坏路径、把权重改回 2.2，都精确报 1 项失败。
+
+> ⚠️ `package.json` 由宿主在插件加载时读，**改 `icon` 字段需要重启 DSH** 才生效（浏览器半的导航图标只需刷新页面）。
+
+### 10.5 验收记录
+
+`node tools/sync-settings-view.mjs` 幂等（连跑两次 md5 一致）；`test/smoke.mjs` M1 72 项（含 M1-I 图标防漂移 6 条）、`test/host.test.mjs` 164 项全绿；`node --check` 通过；`npm pack --dry-run` 确认 `icon.svg` 入包；`local-plugins/dsh-pharos` 的 `lib/client.js` / `lib/settings-view.js` / `package.json` / `icon.svg` 与仓库 md5 一致。
+
+**版本**：0.5.0 → **0.5.1**。用户可见行为变更（设置入口从「内置插件」分区内标签页升为顶级分区 + 新增灯塔图标），无新功能，故走 patch 位；`0.6.0` 留给 M2.5（`docs/m2.5-plan.md`）。`package.json` 的 description 同步改为「…a settings page in the Settings sidebar.」（原为 "a settings tab"，与新位置不符）。
+
+**待办**：README 截图 `screenshot-3/4/5-settings-*.png` 与 `screenshot-2-overview.png` 仍显示旧位置与宿主通用插画，需在重启 DSH 后重拍（拍图须先关系统专注模式）。

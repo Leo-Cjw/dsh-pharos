@@ -59,7 +59,7 @@ const inline =
   '\t// `node tools/sync-settings-view.mjs` 重新生成本 region（保证同步；pretest 自动执行）。\n' +
   '\tvar pharosSettingsView = (function (globalScope) { // eslint-disable-line no-unused-vars\n' +
   body +
-  '\treturn { mountSettingsTab: mountSettingsTab };\n' +
+  '\treturn { mountSettingsSection: mountSettingsSection };\n' +
   '\t})(typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : this));\n';
 
 const head = lines.slice(0, regionStartLine).join('\n');

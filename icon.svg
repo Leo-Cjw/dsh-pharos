@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-label="Pharos">
+  <!--
+    Pharos 标记（法罗斯灯塔），三形状：实心灯头 / 灯台横条 / 收分塔身。
+    几何与描边权重的唯一真源；lib/settings-view.js 的 PHAROS_MARK_* 是其副本
+    （test/smoke.mjs 的 M1-I 段锁一致，改这里必须同步改那里）。
+
+    16 网格 + 描边式不是随手选的，而是对齐宿主图标契约：
+    @deepseek-ai/dsh-client-ui-primitives 的 artwork 统一是
+    viewBox="0 0 16 16" + fill="none" + 每形状 stroke="currentColor"，
+    导航取 ICON_MEDIUM_STROKE = 1.3，strokeLinecap/Linejoin = round。
+    第一版用 36 网格填色剪影，实测两处翻车：① 没设 fill，SVG 默认填黑，
+    深色底下几乎不可见；② 缩到 16px 后三块糊成一条竖线，且与邻座轮廓图标不搭。
+
+    描边权重不在放大时补偿：本图被宿主以 object-fit: contain 渲染在 36（组合包
+    卡片）/30（组件行），纯等比放大、权重保持 1.3/1.5 时 36px 下结构依然清晰
+    （试过提到 2.2，灯头与灯台会粘在一起、整块糊成墩子）。栅格化实测结论。
+
+    灯头刻意实心：16px 下 1.3 描边圆的心孔会塌成亚像素、糊成一坨。
+  -->
+  <circle cx="8" cy="3.1" r="1.75" fill="#F59E0B" />
+  <g fill="none" stroke="#3B7BF6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.8 6.4H11.2" stroke-width="1.5" />
+    <path d="M6.4 6.4L5 14H11L9.6 6.4" stroke-width="1.3" />
+  </g>
+</svg>

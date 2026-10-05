@@ -26,21 +26,23 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 
 ![系统通知横幅：回复完成，点击回到 DSH 查看](assets/screenshot-1-notification.png)
 
-![插件总览：插件详情与设置入口](assets/screenshot-2-overview.png)
+![插件总览：灯塔图标与 v0.5.1 版本号](assets/screenshot-2-overview.png)
 
-![消息通知配置（一）：设置入口与基本设置](assets/screenshot-3-settings-basic.png)
+![消息通知配置（一）：设置入口、标题行与基本设置](assets/screenshot-3-settings-basic.png)
 
-![消息通知配置（二）：提醒时机](assets/screenshot-4-settings-timing.png)
+![消息通知配置（二）：提醒时机、免打扰时段与过滤](assets/screenshot-4-settings-timing.png)
 
-![消息通知配置（三）：过滤与 Webhook 推送](assets/screenshot-5-settings-filter-webhook.png)
+![消息通知配置（三）：Webhook 推送、高级、测试与 Debug](assets/screenshot-5-settings-filter-webhook.png)
 
-> 图为 macOS 本机真实截图：系统通知横幅来自实际「回复完成」事件；其余为设置页「内置插件 → 消息通知」标签的真实界面。
+![插件列表：与社区插件图标风格一致（深色）](assets/screenshot-6-plugins-dark.png)
+
+> 图为 macOS 本机真实截图：系统通知横幅来自实际「回复完成」事件；设置页为顶级「消息通知」分区，左侧导航带灯塔图标，页面顶部标注 `dsh-pharos` 与版本号；三张设置页图完整覆盖全部 9 张配置卡片。
 
 ## 配置
 
 v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，落盘 `<profile>/pharos.json`，设置页改）；host 不在线时回退浏览器偏好（`localStorage` 键 `dshPharos.config`），控制台实时生效：
 
-设置页位于 **设置 → 插件 → dsh-pharos → 「消息通知」**（v0.4：React 渲染，`settings.plugins.tab` 槽位），覆盖全部配置项，另含：
+设置页位于 **设置 → 消息通知**（顶级设置分区；v0.4 起 React 渲染，2026-10-05 由 `settings.plugins.tab` 迁至 `settings.section`），覆盖全部配置项，另含：
 - **当轮统计卡片**（v0.5）：展示最近一轮的耗时 / tokens / 缓存命中率 / TPS（host 官方投影当轮 delta；无统计时隐藏）
 - **Webhook 渠道管理**：增删多渠道（企微/飞书/钉钉加签 + 通用透传），保存即生效
 - **免打扰时段**（跨午夜）、**子代理过滤**、**apiToken** 管理（`***` 掩码=保留、`""`=清除）
@@ -121,8 +123,8 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 
 从 GitHub 克隆本仓库开发（`git clone git@github.com:Leo-Cjw/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
 
-- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + v0.4 M1 组：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / **SSE 命名事件契约锁**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归）；host 半：`node test/host.test.mjs`（130 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
-- 发布流程：改 `lib/` 与 `package.json` → `node tools/sync-settings-view.mjs`（设置页视图内联进 client.js，`npm test` 前会自动执行）→ 跑测试 → 升版本 → `npm publish` → `git push` → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention"|"done"|"error")` 验证
+- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 72 项：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致）；host 半：`node test/host.test.mjs`（164 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
+- 发布流程：改 `lib/` 与 `package.json` → `node tools/sync-settings-view.mjs`（设置页视图内联进 client.js，`npm test` 前会自动执行）→ 跑测试 → 升版本 → `git push` + 打 tag → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention"|"done"|"error")` 验证
 - 架构文档：[functional-architecture.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
 - 架构图：[pharos-architecture.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-architecture.html)（浏览器半 × Host 半双层结构）· [pharos-sequence.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-sequence.html)（通知事件流）——浏览器打开即交互（主题切换/聚焦/导出）
 - 对标仓库代码级分析：[docs/research/](https://github.com/Leo-Cjw/dsh-pharos/tree/main/docs/research)（notify-me / turn-notify / my-notify / session-notify 逐文件报告）
@@ -134,7 +136,8 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 - **浏览器半**（`lib/client.js`）订阅客户端 `sessions` 服务（硬依赖，本运行时必有）与 `ctx.uiSession`（惰性 `ctx.get()`，避免 inject 硬门控导致条目停在 pending）：
   - `uiSession.sessionStatus` 每会话发布 `{ running, pendingInteraction, completionUnread }`，「需要你」与「回复完成」沿用 v0.3 语义（二次提醒/标题标记/闪烁兜底不变）。
   - v0.4 新增对 host 半事件流的消费：`EventSource('/pharos/api/stream')`（`event: pharos` 命名事件，帧 JSON）收 PharosEvent 帧，与本地 `uiSession` 信号共用同一策略层（quiet hours / 子代理过滤 / 双源 done 去重 / 通知渠道路由）；系统通知不可用时页内 toast 兜底（上限 4 条、6s 消失、点击直达会话）。`debug()` 的 `framesReceived` 一栏可直接判定「通道已通」还是「连上但零帧」。
-  - 设置页视图（`lib/settings-view.js`，内联于 bundle）挂 `settings.plugins.tab`。
+  - 设置页视图（`lib/settings-view.js`，内联于 bundle）挂 `settings.section` —— 顶级「设置 → 消息通知」分区，`order 30`；顶级分区的壳不画标题，故视图自绘 `.pharos-title`。
+  - 图标：根目录 `icon.svg`（灯塔）经 `package.json` 的 `icon` 字段供给**插件卡片 / 组合包详情页 / 组件行**；设置导航那一行因 `settings.section` 无 icon 字段，由 `installSettingsNavIcon()` 按标签文本认领并换节点。两处共用同一几何（16 网格描边，与宿主 `ui-primitives` 图标契约一致：1.3 描边 / round cap / `currentColor`），`test/smoke.mjs` 的 M1-I 段锁 `icon.svg` ↔ 内联常量一致。
 - **host 半**（`lib/index.js` + `lib/host/*`，Electron 主进程）：
   - 订阅 `session/event`（`turn/end` 的 `reason.kind` 主信号 → done/error/interrupted/limit，`agent/error` / `agent/turn-stopping` / `agent/request-error` / `jobs` 双轨兜底），构造 PharosEvent 帧。
   - `ctx.webServer.register`（同源路由，无独立端口）：`GET /pharos/api/stream`（SSE，25s 心跳）/ `POST /pharos/api/trigger`（远程触发，loopback 围栏 + `x-pharos-token`）/ `GET|PUT /pharos/api/config`（掩码语义 `***`=保留、`""`=清除）/ `GET /pharos/api/webhooks`。
@@ -150,7 +153,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 | 通知不可用时标题闪烁兜底 | dsh-turn-notify | ✅（⏳，6s）|
 | 耗时小结 | dsh-turn-notify / dsh-session-notify | ✅（客户端计时；token/TPS 需 host 侧数据，未做）|
 | 点击通知直达会话 | dsh-notify-me / dsh-my-notify | ✅（best-effort）|
-| 设置页（设置→消息通知）| dsh-turn-notify / dsh-my-notify | ✅ v0.4（`settings.plugins.tab` 槽位，React 经模块表 `require('react')`）|
+| 设置页（设置→消息通知）| dsh-turn-notify / dsh-my-notify | ✅ v0.4（`settings.section` 槽位——与两个对标插件同款；React 经模块表 `require('react')`）|
 | 多事件分类（出错/被中断/达到上限）+ 独立音效 | dsh-turn-notify | ✅ v0.4（host 半 `session/event` reason.kind 归一定类 → SSE 帧；error 重低音、interrupted/limit 中音警示）|
 | 出站 webhook（企微/飞书/钉钉/通用 + 加签/重试/失败缓冲）| dsh-my-notify | ✅ v0.4（host 半 `/pharos/api/stream` 双通道之一）|
 | 远程触发接口（本机 POST 通知）| dsh-my-notify | ✅ v0.4（`POST /pharos/api/trigger`，loopback 围栏 + 可选 `x-pharos-token`）|

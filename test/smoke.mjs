@@ -338,6 +338,47 @@ let m1Passed = 0;
 const m1a = (cond, msg) => { if (!cond) { m1Failed++; console.error('M1-FAIL:', msg); } else { m1Passed++; console.log('M1 ok :', msg); } };
 const m1Wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ---- M1-I: 标记几何防漂移（icon.svg ↔ lib/client.js 的 PHAROS_MARK_*）----
+// 标记有两个消费面：① 插件卡片/组件行/组合包详情页读 package.json 的 icon（根目录
+// icon.svg，宿主以 <img> 渲染）；② 设置导航那一行读浏览器半里的 PHAROS_MARK_*（宿主
+// 的 settings.section 没有 icon 字段，由 installSettingsNavIcon 换节点）。形状必须
+// 处处一致 —— 这里是纯静态断言，不依赖沙箱（m1Apply 的 ctx 不含 slots，设置视图不挂载）。
+{
+  const icon = fs.readFileSync(new URL('../icon.svg', import.meta.url), 'utf8');
+  const paths = [...icon.matchAll(/ d="([^"]+)"/g)].map((m) => m[1]);
+  const circle = icon.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/);
+  m1a(paths.length === 2 && !!circle, `icon.svg 形状数 = 2 路径 + 1 灯头圆（实得 ${paths.length} 路径）`);
+  m1a(paths.every((d) => src.includes(`"${d}"`)), 'icon.svg 的两条路径都已内联进 client.js');
+  const lamp = src.match(/PHAROS_MARK_LAMP = \{ cx: ([\d.]+), cy: ([\d.]+), r: ([\d.]+) \}/);
+  m1a(!!lamp && !!circle && lamp[1] === circle[1] && lamp[2] === circle[2] && lamp[3] === circle[3],
+    '灯头几何两处一致（' + (circle ? `${circle[1]}/${circle[2]}/${circle[3]}` : '缺 circle') + '）');
+  m1a(/viewBox="0 0 16 16"/.test(icon) && src.includes('PHAROS_MARK_VIEWBOX = "0 0 16 16"'),
+    'viewBox 两处一致（16×16，对齐 ui-primitives 的 artwork 网格）');
+  // 描边式契约：宿主 artwork 是 fill:none + stroke:currentColor + 1.3 描边，
+  // 填色剪影缩到 16px 会糊成竖线（已用栅格化实测）。这里锁住我们没退回去，
+  // 并锁住描边权重不在放大时补偿（提到 2.2 会让 36px 卡片糊成墩子）。
+  m1a(/fill="none"/.test(icon) && src.includes('svg.setAttribute("fill", "none")')
+    && src.includes('svg.setAttribute("stroke", "currentColor")'),
+    '描边式契约成立（fill:none + stroke:currentColor）');
+  m1a(/stroke-width="1\.3"/.test(icon) && /stroke-width="1\.5"/.test(icon)
+    && src.includes('PHAROS_MARK_STROKE = 1.3') && src.includes('PHAROS_MARK_STROKE_HEAVY = 1.5'),
+    '描边权重两处一致（塔身 1.3 / 灯台 1.5，不做尺寸补偿）');
+}
+
+// ---- M1-J: 设置页标题行的包名/版本 与 package.json 一致 ----
+// PKG_VERSION 是编译期常量（settings.section 只投影 id/order/label，没有任何 slot
+// 把包版本传给浏览器半；better-sidebar 同样是 bundle 内字面量）。代价是可能与
+// package.json 漂移 —— 版本号不同步最难被发现，所以锁在这里。
+{
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  m1a(src.includes(`var PKG_NAME = "${pkg.name}";`), `包名与 package.json 一致（${pkg.name}）`);
+  m1a(src.includes(`var PKG_VERSION = "${pkg.version}";`), `版本常量与 package.json 一致（${pkg.version}）`);
+  // 徽章渲染处必须真的用了这两个常量，而不是又写了一遍字面量。
+  m1a(src.includes('h("span", { className: "pharos-pkg" }, PKG_NAME)')
+    && src.includes('h("span", { className: "pharos-ver" }, "v" + PKG_VERSION)'),
+    '标题行渲染用的是常量而非重复字面量');
+}
+
 // group 隔离：fresh reload + apply（每个 group 独立 bundle/状态）
 function m1Reload(opts = {}) {
   return reload(opts);
