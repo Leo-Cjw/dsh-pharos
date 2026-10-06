@@ -193,7 +193,32 @@ interface PharosEvent {
 **B 组（webhook 模板定制）**：`renderTemplate` 已在 M1 落地（9 变量），B-1 剩 `{cache}{tps}` 两 token
 （`{sessionUrl}` 已核实无会话路由、删除），B-2「手动重放」拆出单独评估——**均未在本轮落地**。
 
-**C 组（不做）**：workflow 级通知细分、累计统计库、错误严重度分级音效——延后。
+**C 组（不做）**：累计统计库、错误严重度分级音效、workflow 进度条 UI——延后。
+
+### M2.5 — 工作流提醒与模板补全（v0.6.0，已落地 2026-10-06）
+
+落地细节见 [m2.5-plan.md](m2.5-plan.md)（经 5 轮评审，共 29 条修订 / 19 条风险）：
+
+**A 组 · webhook 模板补全**：`renderTemplate` 增 `{cache}`（命中率 ×100 取整）与 `{tps}`
+（1 位小数）。语义与既有 token 一致：有值才填、无值空串。
+
+**B 组 · 工作流提醒**（默认关闭）：
+- **订阅** `workflow/phase` / `agent-start` / `agent-end`（`ctx.on` **emit** 事件，签名二元
+  `(info, arg)`，与既有 `agent/*` 的 `(payload, meta, next)` 三参**不兼容**，故另写包装）；
+  `workflow/log` **独立**订阅（不嵌在 `workflowEvents` 门内 —— 两个开关视觉独立，
+  嵌套会产生「只勾日志却静默无效果」的隐藏依赖）。
+- **归一**：新 `kind: 'workflow'` + `subtype` 字段；`sessionTitle` 取 `info.meta.name`（工作流名），
+  `sessionId` 取 `agent.childId`（**真实会话归属**，agent 事件）或 `String(info.id)`（WorkflowRunId）。
+- **去重**：`dedupeKey` 由 `dedupeKeyOf('workflow', sid, ikey)` 预先算好再作为**字段**传入
+  （⚠️ `interactionKey` 只是 `dedupeKeyOf` 的第三参、**不是** `makeFrame` 入参，传了会被解构丢弃）。
+- **三道静默**：`workflowLog` 默认不订阅（零开销）→ 开启时 5s/run 限流 → 帧带 `silent:true`；
+  `silent` 帧在 **host `emitWebhooks` 开头即 return**（不外发 webhook）+ 浏览器半 `onSseFrame` 早退。
+- **可观测性**：`debug().recentFrames` 环形队列（20 条）记录**所有** SSE 帧，
+  入队点**早于** enabled/quietHours/kind 三道早退 —— 否则「提醒没来」这类最该排查的场景恰好看不到。
+- **双门不对称**：订阅门在 `apply()` 时读配置 → 「开」需重启 DSH；回调门每次判 → 「关」即时生效。
+
+**已知取舍**（均写进 README 已知限制）：workflow 帧 `agentType` 恒 `root`（否则默认
+`skipSubagents=true` 会吞掉整组）；同名阶段 3s 内去重；音效复用默认音型。
 
 ---
 

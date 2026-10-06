@@ -150,10 +150,15 @@ const profileName = 'test';
 const profileDir = path.join(DSH_HOME, 'profiles', profileName);
 fs.mkdirSync(profileDir, { recursive: true });
 
-function setup({ dedupeMs, profileContext } = {}) {
+function setup({ dedupeMs, profileContext, config } = {}) {
   // 隔离：每个测试独立 store，落盘文件一律重置（避免前段配置——quietHours/apiToken/
   // jobEvents——泄漏到后段）
   try { fs.rmSync(path.join(profileDir, 'pharos.json'), { force: true }); } catch { /* */ }
+  // M2.5：config 预置 —— 必须在 apply() **之前**写盘，因为 workflowEvents 等开关是
+  // 「启动时读配置决定是否订阅」（订阅门），apply 后再改不生效。
+  if (config && typeof config === 'object') {
+    fs.writeFileSync(path.join(profileDir, 'pharos.json'), JSON.stringify(config), 'utf8');
+  }
   const fetchStub = makeFetchStub();
   globalThis.fetch = fetchStub;
   const ctx = makeStubCtx();
@@ -906,9 +911,177 @@ if (!stats) {
   disposer();
 }
 
+// ---- 16d. M2.5 白盒：agent-start 帧捎带 childId（浏览器半据此过滤本地 done）----
+{
+  const wf = frames.makeFrame({ kind: 'workflow', subtype: 'agent-start', childId: 'CHILD-7', note: '启动 agent 采集员（第 1 个）' });
+  assert(wf.childId === 'CHILD-7', 'makeFrame 展开 childId（浏览器半过滤本地 done 的判据）');
+  assert(!('childId' in frames.makeFrame({ kind: 'workflow', note: 'x' })), '未传 childId → 帧不含该字段');
+  assert(!('childId' in frames.makeFrame({ kind: 'done', note: 'x' })), '非 workflow 帧不带 childId');
+}
+
 // ---- 17. rate limit 常量 + host 默认 ----
 {
   assert(hostMod.HOST_DEDUPE_MS === 3000, 'host 导出 HOST_DEDUPE_MS=3000');
+}
+
+// ---- 18. M2.5 白盒：makeFrame 展开 subtype/silent；workflow kind 与 note 片段 ----
+{
+  assert(frames.HOST_KINDS.has('workflow'), 'HOST_KINDS 含 workflow');
+  const wf = frames.makeFrame({ kind: 'workflow', subtype: 'phase', silent: true, sessionId: 'R1', note: '进入阶段：准备' });
+  assert(wf.subtype === 'phase', 'makeFrame 展开 subtype');
+  assert(wf.silent === true, 'makeFrame 展开 silent');
+  assert(wf.severity === 'info', 'workflow 帧 severity=info');
+  const plain = frames.makeFrame({ kind: 'workflow', note: 'x' });
+  assert(!('subtype' in plain), '未传 subtype → 帧不含该字段（不产 undefined 键）');
+  assert(!('silent' in plain), '未传 silent → 帧不含该字段');
+  const notSilent = frames.makeFrame({ kind: 'workflow', subtype: 'log', silent: false, note: 'x' });
+  assert(!('silent' in notSilent), 'silent=false → 不展开（严格 === true）');
+  // noteFor 只产片段：前缀统一由浏览器半加（两边都加会渲染成「工作流『工作流…』」）
+  const seg = frames.noteFor('workflow', { detail: '进入阶段：数据准备' });
+  assert(seg === '进入阶段：数据准备', 'noteFor(workflow) 产片段且无「工作流」前缀');
+  assert(!seg.includes('工作流'), '片段内不含「工作流」前缀（防双前缀）');
+  // 锁死风险 4g：不同 phase 的 dedupeKey 必须不同（否则 3000ms 窗内互相吞）
+  const k1 = frames.dedupeKeyOf('workflow', 'R1', 'phase:数据准备');
+  const k2 = frames.dedupeKeyOf('workflow', 'R1', 'phase:模型调用');
+  assert(k1 !== k2, '两个不同 phase 的 dedupeKey 不相同（风险 4g 回归锁）');
+  assert(k1 === 'workflow:R1:phase:数据准备', 'dedupeKey 形如 workflow:<runId>:phase:<title>');
+  // agent 子类按 seq 区分
+  assert(frames.dedupeKeyOf('workflow', 'C1', 'agent-start:1') !== frames.dedupeKeyOf('workflow', 'C1', 'agent-start:2'),
+    '不同 seq 的 agent-start dedupeKey 不相同');
+}
+
+// ---- 19. M2.5 白盒：renderTemplate 的 {cache}/{tps} 两 token ----
+{
+  const rich = { sessionTitle: 'S', cacheHitRate: 0.142, tps: 13.33, tokens: 240, durationMs: 12345 };
+  assert(webhook.renderTemplate('c={cache}', rich) === 'c=14%', '{cache} 渲染为百分数取整（0.142 → 14%）');
+  assert(webhook.renderTemplate('t={tps}', rich) === 't=13.3 tok/s', '{tps} 渲染为 1 位小数 tok/s');
+  assert(webhook.renderTemplate('c={cache}', { cacheHitRate: 0 }) === 'c=0%', '{cache} 值 0 正常渲染（非空串）');
+  const bare = webhook.renderTemplate('c={cache} t={tps}', { sessionTitle: 'S' });
+  assert(bare === 'c= t=', '帧无 cacheHitRate/tps → 两 token 空串（不出现 undefined/NaN）');
+}
+
+// ---- 20. M2.5 黑盒：workflow 事件 → 帧（订阅门 + 归一 + dedupeKey）----
+{
+  const { ctx, disposer } = setup({ config: { workflowEvents: true } });
+  const { res, done } = openStream(ctx);
+  await done;
+  const info = { id: 'RUN-1', meta: { name: '每日巡检' } };
+  const fireWorkflow = (name, a, b) => {
+    const h = ctx.handlers.get(name);
+    assert(typeof h === 'function', `已订阅 ${name}`);
+    if (typeof h === 'function') h(a, b);
+  };
+  fireWorkflow('workflow/phase', info, '数据准备');
+  await wait(60);
+  let frames = sseFrames(res);
+  let f = frames.find((x) => x.kind === 'workflow');
+  assert(!!f, 'workflow/phase 产出 workflow 帧');
+  if (f) {
+    assert(f.subtype === 'phase', '帧 subtype=phase');
+    assert(f.sessionTitle === '每日巡检', '帧 sessionTitle=meta.name（工作流名，非裸 id）');
+    assert(f.sessionId === 'RUN-1', 'phase 帧 sessionId=WorkflowRunId');
+    assert(typeof f.note === 'string' && f.note.includes('数据准备'), 'note 含阶段标题');
+    assert(!f.note.includes('工作流'), 'host note 不含「工作流」前缀（前缀由浏览器半加）');
+    assert(f.dedupeKey === 'workflow:RUN-1:phase:数据准备', 'phase 帧 dedupeKey 带阶段标识');
+    assert(!('silent' in f), 'phase 帧非 silent（会正常通知）');
+  }
+  // 不同阶段 → dedupeKey 不同，且 3000ms 内不被吞（锁 4g）
+  fireWorkflow('workflow/phase', info, '模型调用');
+  await wait(60);
+  frames = sseFrames(res);
+  const phases = frames.filter((x) => x.kind === 'workflow' && x.subtype === 'phase');
+  assert(phases.length === 2, '两个不同 phase 帧都产出（未被 3000ms dedupe 吞掉）');
+  const keys = new Set(phases.map((x) => x.dedupeKey));
+  assert(keys.size === 2, '两个 phase 帧 dedupeKey 互不相同');
+  // agent 事件：sessionId 取 childId（真实 SessionId）
+  fireWorkflow('workflow/agent-start', info, { seq: 1, label: '采集员', childId: 'CHILD-9' });
+  await wait(60);
+  frames = sseFrames(res);
+  const ag = frames.find((x) => x.kind === 'workflow' && x.subtype === 'agent-start');
+  assert(!!ag, 'workflow/agent-start 产出帧');
+  if (ag) {
+    assert(ag.sessionId === 'CHILD-9', 'agent 帧 sessionId=childId（真实会话归属）');
+    assert(ag.dedupeKey === 'workflow:CHILD-9:agent-start:1', 'agent-start dedupeKey 用 seq');
+  }
+  fireWorkflow('workflow/agent-end', info, { seq: 1, label: '采集员', childId: 'CHILD-9', outcome: 'completed' });
+  await wait(60);
+  frames = sseFrames(res);
+  const ae = frames.find((x) => x.kind === 'workflow' && x.subtype === 'agent-end');
+  assert(!!ae, 'workflow/agent-end 产出帧');
+  if (ae) assert(ae.note.includes('completed'), 'agent-end note 含 outcome');
+  disposer();
+}
+
+// ---- 21. M2.5 黑盒：默认关 → 不订阅；回调门可即时关；silent 帧不外发 webhook ----
+{
+  // 21a. 默认配置（workflowEvents=false）→ 根本不订阅
+  const a = setup();
+  assert(!a.ctx.handlers.has('workflow/phase'), '默认关 → 不订阅 workflow/phase（零开销）');
+  assert(!a.ctx.handlers.has('workflow/agent-start'), '默认关 → 不订阅 workflow/agent-start');
+  assert(!a.ctx.handlers.has('workflow/log'), '默认关 → 不订阅 workflow/log');
+  a.disposer();
+
+  // 21a-2. 缺陷回归：workflowLog 必须**独立**订阅（不嵌在 workflowEvents 门内）。
+  // 嵌套时「只勾工作流日志、没勾工作流提醒」会静默无效果、零提示 —— 设置页两个
+  // checkbox 视觉独立，用户无从得知存在依赖。
+  const a2 = setup({ config: { workflowEvents: false, workflowLog: true } });
+  assert(!a2.ctx.handlers.has('workflow/phase'), '只开 workflowLog → 不订阅 phase（符合预期）');
+  assert(a2.ctx.handlers.has('workflow/log'),
+    '只开 workflowLog → **仍订阅** log（两开关独立，无隐藏依赖）');
+  a2.disposer();
+
+  // 21b. 开启后运行时改配置（回调门）→ 即时生效：事件被 handler 开头 return，不产帧
+  const b = setup({ config: { workflowEvents: true } });
+  assert(b.ctx.handlers.has('workflow/phase'), '开启 → 已订阅 workflow/phase');
+  const { res: bRes, done: bDone } = openStream(b.ctx);
+  await bDone;
+  b.ctx.handlers.get('workflow/phase')({ id: 'RUN-2', meta: { name: '开启时的阶段' } }, '开启时');
+  await wait(60);
+  assert(sseFrames(bRes).some((x) => x.kind === 'workflow'), '开启时 phase 帧正常产出');
+  await putConfig(b.ctx, { workflowEvents: false });
+  b.ctx.handlers.get('workflow/phase')({ id: 'RUN-2', meta: { name: 'W' } }, '关闭后的阶段');
+  await wait(60);
+  assert(!sseFrames(bRes).some((x) => x.note && x.note.includes('关闭后的阶段')),
+    '回调门：运行中关闭后事件即时被丢弃（不产新帧）');
+  b.disposer();
+
+  // 21c. workflowLog 开启 → log 帧带 silent，且 webhook 零次 send
+  const c = setup({ config: { workflowEvents: true, workflowLog: true } });
+  assert(c.ctx.handlers.has('workflow/log'), 'workflowLog 开启 → 已订阅 workflow/log');
+  await putConfig(c.ctx, { webhooks: [{ name: 'w', channel: 'generic', url: 'http://127.0.0.1:9/x', enabled: true, events: [] }] });
+  const { res: cRes, done: cDone } = openStream(c.ctx);
+  await cDone;
+  c.ctx.handlers.get('workflow/log')({ id: 'RUN-3', meta: { name: 'W' } }, '旁白一行');
+  await wait(60);
+  const cFrames = sseFrames(cRes);
+  const lf = cFrames.find((x) => x.kind === 'workflow' && x.subtype === 'log');
+  assert(!!lf, 'workflowLog 开启 → 产出 log 帧');
+  if (lf) {
+    assert(lf.silent === true, 'log 帧带 silent=true（不弹通知）');
+    assert(lf.dedupeKey === 'workflow:RUN-3:log', 'log 帧 dedupeKey 固定 :log');
+  }
+  assert(c.fetchStub.calls.length === 0, 'silent 帧不外发 webhook（零次 send）');
+  // ⚠️ 正向对照：只断言「silent → 零次」的话，emitWebhooks 整体坏掉这条测试照样绿。
+  //    故必须再断言「非 silent 帧 → 至少发一次」，两条合起来才锁住「只挡 silent」。
+  c.ctx.handlers.get('workflow/phase')({ id: 'RUN-3', meta: { name: 'W' } }, '普通阶段');
+  await wait(80);
+  assert(c.fetchStub.calls.length >= 1,
+    `非 silent 的 workflow 帧正常外发 webhook（发 ${c.fetchStub.calls.length} 次）`);
+  c.disposer();
+}
+
+// ---- 22. M2.5：workflowEvents/workflowLog 可持久化（默认 false，可 PUT 开启）----
+{
+  const { ctx, disposer } = setup();
+  const dflt = (await getConfig(ctx)).res;
+  const dfltBody = JSON.parse(dflt.body);
+  assert(dfltBody.workflowEvents === false, 'workflowEvents 默认 false');
+  assert(dfltBody.workflowLog === false, 'workflowLog 默认 false');
+  await putConfig(ctx, { workflowEvents: true, workflowLog: true });
+  const got = JSON.parse((await getConfig(ctx)).res.body);
+  assert(got.workflowEvents === true, 'workflowEvents 可持久化');
+  assert(got.workflowLog === true, 'workflowLog 可持久化');
+  disposer();
 }
 
 console.log(failed === 0

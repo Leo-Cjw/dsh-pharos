@@ -1,7 +1,7 @@
 {
   "name": "dsh-pharos",
-  "version": "0.5.1",
-  "description": "DSH 桌面守望提醒插件（v0.5：host 桥 + 浏览器双半；v0.5.1 设置页升为顶级分区 + 灯塔图标）。模型需要你操作（审批/方案确认/提问）或回复在后台完成时提醒你；v0.4 新增出错/中断/上限通知、SSE 帧桥、Webhook（企微/飞书/钉钉/通用）、远程触发、安静时段、子代理过滤与设置页；v0.5 新增当轮统计（token/缓存命中率/TPS，官方投影口径）。Pharos lighthouse for DeepSeek Harness — alerts you when the agent needs your input or a reply finishes in the background, now with per-turn stats (cache-hit rate & TPS), error/interrupt/limit alerts, SSE bridge, webhooks, remote trigger, quiet hours, and a settings page in the Settings sidebar.",
+  "version": "0.6.0",
+  "description": "DSH 桌面守望提醒插件（v0.6-alpha：host 桥 + 浏览器双半 + 工作流提醒）。模型需要你操作（审批/方案确认/提问）或回复在后台完成时提醒你；v0.4 新增出错/中断/上限通知、SSE 帧桥、Webhook（企微/飞书/钉钉/通用）、远程触发、安静时段、子代理过滤与设置页；v0.5 新增当轮统计（token/缓存命中率/TPS，官方投影口径）；v0.6 新增工作流提醒（阶段推进 / agent 启动结束，默认关闭）与 webhook 模板 {cache}{tps}。Pharos lighthouse for DeepSeek Harness — alerts you when the agent needs your input or a reply finishes in the background, with per-turn stats (cache-hit rate & TPS), workflow progress alerts, error/interrupt/limit alerts, SSE bridge, webhooks, remote trigger, quiet hours, and a settings page in the Settings sidebar.",
   "license": "MIT",
   "repository": {
     "type": "git",

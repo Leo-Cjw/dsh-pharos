@@ -216,7 +216,7 @@ const count = (title) => notifications.filter((x) => x.title === title).length;
 
 apply(ctx);
 console.log('bundle name/inject:', name, JSON.stringify(inject));
-assert(window.__dshPharos?.version === '0.5.0', '控制台 API 更名为 __dshPharos v0.5.0');
+assert(window.__dshPharos?.version === '0.6.0', '控制台 API 更名为 __dshPharos v0.6.0');
 
 // baseline
 assert(notifications.length === 0, '基线不弹');
@@ -379,6 +379,87 @@ const m1Wait = (ms) => new Promise((r) => setTimeout(r, ms));
     '标题行渲染用的是常量而非重复字面量');
 }
 
+// ---- M1-K: M2.5 workflow 静态契约锁（防 host/client 两侧漂移）----
+// 与 M1-H（host 写帧事件名 ↔ client 监听名）同范式：这些是**纯静态**的跨文件一致性断言，
+// 不依赖沙箱。它们锁的是「四轮评审反复抓到的两类漂移」：
+//   ① host 产出的 kind 若没在 client 的 SSE_KINDS 登记 → 帧被静默丢弃（用户啥也收不到）
+//   ② TEXT.zh / TEXT.en 的 key 集合若不一致 → 漏 en 表会渲染 undefined
+{
+  // ① HOST_KINDS ⊆ SSE_KINDS
+  const hostFrames = fs.readFileSync(new URL('../lib/host/frames.js', import.meta.url), 'utf8');
+  const hostKindBody = hostFrames.match(/export const HOST_KINDS = new Set\(\[([^\]]+)\]/)?.[1] ?? '';
+  const hostKinds = [...hostKindBody.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const sseKindsBlock = src.match(/const SSE_KINDS = \{([^}]+)\}/)?.[1] ?? '';
+  const sseKinds = [...sseKindsBlock.matchAll(/(\w+):\s*1/g)].map((m) => m[1]);
+  m1a(hostKinds.length > 0 && sseKinds.length > 0,
+    `解析出 host ${hostKinds.length} 个 kind / client ${sseKinds.length} 个 SSE kind`);
+  const missing = hostKinds.filter((k) => !sseKinds.includes(k));
+  m1a(missing.length === 0,
+    `契约：host HOST_KINDS ⊆ client SSE_KINDS${missing.length ? `（缺 ${missing.join(',')}）` : ''}`);
+  m1a(sseKinds.includes('workflow'), 'SSE_KINDS 已登记 workflow（M2.5 致命项，不登记则帧被丢弃）');
+
+  // ② TEXT.zh / TEXT.en key 集合一致（漏 en 表 → 渲染 undefined）
+  // client.js 的 TEXT 是 3-tab 缩进：const TEXT = { \n\t\t\tzh: { ... \n\t\t\t}, \n\t\t\ten: { ... \n\t\t\t} }
+  const textBlock = (lang) => {
+    const start = src.indexOf(`\n\t\t\t${lang}: {`);
+    if (start < 0) return '';
+    // 该语言块的结束 = 下一个 `\n\t\t\t},` 或 `\n\t\t\t}` （缩进与 lang 同级）
+    const rest = src.slice(start + 1);
+    const end = rest.search(/\n\t\t\t\},?\s*$/m);
+    return end < 0 ? rest : rest.slice(0, end);
+  };
+  const keySet = (block) => new Set([...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]));
+  const zhKeys = keySet(textBlock('zh'));
+  const enKeys = keySet(textBlock('en'));
+  zhKeys.delete('zh');
+  enKeys.delete('en');
+  m1a(zhKeys.size > 0 && enKeys.size > 0, `解析出 TEXT.zh ${zhKeys.size} key / TEXT.en ${enKeys.size} key`);
+  const onlyZh = [...zhKeys].filter((k) => !enKeys.has(k));
+  const onlyEn = [...enKeys].filter((k) => !zhKeys.has(k));
+  m1a(onlyZh.length === 0 && onlyEn.length === 0,
+    `契约：TEXT.zh 与 TEXT.en key 集合一致${onlyZh.length || onlyEn.length
+      ? `（仅 zh 有 ${onlyZh.join(',') || '无'}；仅 en 有 ${onlyEn.join(',') || '无'}）` : ''}`);
+  m1a(zhKeys.has('workflowTitle') && zhKeys.has('workflowBody'), 'TEXT.zh 含 workflow 文案');
+  m1a(enKeys.has('workflowTitle') && enKeys.has('workflowBody'), 'TEXT.en 含 workflow 文案（漏则渲染 undefined）');
+
+  // ③ workflow 正文无「工作流『工作流』」双前缀：host 产片段、前缀只在 client 加
+  const wfBodyZh = src.match(/workflowBody: \(sessionTitle, note\) =>\s*\n?\s*`([^`]*)`/)?.[1] ?? '';
+  m1a(wfBodyZh.includes('工作流') && !/工作流[^`]*工作流/.test(wfBodyZh),
+    `workflowBody 单前缀（实得：${wfBodyZh.trim().slice(0, 40)}）`);
+
+  // ④ silent 通路三处齐全：SSE_KINDS 之后早退 + debug 队列 + EVENTS 含 workflow
+  m1a(/if \(frame\.silent === true\) return;/.test(src),
+    'onSseFrame 遇 silent 帧 → return（不弹通知，全渠道静默）');
+  m1a(src.includes('recentFrames: [...debugFrameRing]'), 'debug() 暴露 recentFrames 环形队列');
+  m1a(/const DEBUG_FRAME_RING = 20;/.test(src), 'debug 队列容量常量为 20');
+  // ⚠️ 入队点必须早于 enabled/quietHours/kind 三道早退 —— 否则「提醒没来」
+  // 这类最该排查的场景（开关关 / 静默期 / kind 未登记）恰好什么都看不到。
+  // ⚠️ 必须在 onSseFrame 函数**区间内**比较：这两个早退串在文件别处（deliver/notify）
+  // 也出现过，直接 indexOf 会命中更早的位置导致假失败。
+  const onSse = src.slice(src.indexOf('function onSseFrame'), src.indexOf('function connectSse'));
+  const sseCall = onSse.indexOf('pushDebugFrame(frame);');
+  m1a(sseCall > 0, 'onSseFrame 内有 pushDebugFrame 调用点');
+  m1a(sseCall < onSse.indexOf('if (!cfg.enabled) return;'),
+    'pushDebugFrame 调用在 enabled 早退之前（enabled 关时也能观察到帧）');
+  m1a(sseCall < onSse.indexOf('if (quietHoursActive()) return;'),
+    'pushDebugFrame 调用在 quietHours 早退之前（静默期也能观察到帧）');
+  m1a(sseCall < onSse.indexOf('SSE_KINDS, frame.kind)'),
+    'pushDebugFrame 调用在 kind 闸门之前（kind 未登记时也能观察到帧）');
+  // ⚠️ 缺陷回归：设置页 TEST_KINDS 的每个取值都必须登记在 ALL_TEST_KINDS，
+  // 否则「测试通知」选到未登记的 kind 会落 else 分支、弹出别的文案（按钮骗人）。
+  const testKindsBlock = src.match(/var TEST_KINDS = \[([\s\S]*?)\n\s*\];/)?.[1] ?? '';
+  const testKinds = [...testKindsBlock.matchAll(/value: "(\w+)"/g)].map((m) => m[1]);
+  const allTestBlock = src.match(/const ALL_TEST_KINDS = \{([^}]+)\}/)?.[1] ?? '';
+  const allTestKinds = [...allTestBlock.matchAll(/(\w+):\s*1/g)].map((m) => m[1]);
+  m1a(testKinds.length > 0 && allTestKinds.length > 0,
+    `解析出 TEST_KINDS ${testKinds.length} 项 / ALL_TEST_KINDS ${allTestKinds.length} 项`);
+  const unregistered = testKinds.filter((k) => !allTestKinds.includes(k));
+  m1a(unregistered.length === 0,
+    `契约：设置页 TEST_KINDS ⊆ ALL_TEST_KINDS${unregistered.length ? `（缺 ${unregistered.join(',')}）` : ''}`);
+  m1a(allTestKinds.includes('workflow'), 'ALL_TEST_KINDS 已登记 workflow（否则测试按钮弹「完成」）');
+  const eventsBlock = src.match(/var EVENTS = \[([\s\S]*?)\n\s*\];/)?.[1] ?? '';
+  m1a(eventsBlock.includes('value: "workflow"'), 'EVENTS（webhook 事件清单）含 workflow');}
+
 // group 隔离：fresh reload + apply（每个 group 独立 bundle/状态）
 function m1Reload(opts = {}) {
   return reload(opts);
@@ -449,6 +530,80 @@ if (!m1Ready) {
         m1a(r.bag.audioCtx > beforeAudio, `SSE ${kind} 帧 → 有音效尝试（音型区分）`);
       }
     }
+  }
+
+  // ---- M1-L: test(kind) 覆盖 workflow（缺陷回归：ALL_TEST_KINDS 漏 workflow 时，
+  // 设置页「测试通知」选「工作流」会落 else 分支弹出「完成」——按钮骗人）----
+  {
+    const r = m1Reload();
+    m1Apply(r);                       // 必须 apply 才装 __dshPharos（与 M2-A 段同范式）
+    const api = r.context.window.__dshPharos;
+    m1a(!!api, 'apply 后 __dshPharos 可用');
+    if (api) {
+      const before = r.bag.notifications.length;
+      api.test('workflow');
+      await m1Wait(40);
+      m1a(r.bag.notifications.length === before + 1, "test('workflow') 弹一次通知");
+      const n = r.bag.notifications.at(-1);
+      m1a(!!n && /工作流|Workflow/.test(n.title ?? ''),
+        `test('workflow') 标题是工作流文案（实得：${n?.title}）`);
+      m1a(!!n && !/已完成|任务完成|Task done/.test(n.title ?? ''),
+        `test('workflow') 未落 else 兜底（实得：${n?.title}）`);
+    }
+  }
+
+  // ---- M1-M: workflow 子代理的 done 被过滤（skipSubagents 作用于「本地 done 路径」）----
+  // 缺陷回归：skipSubagents 原本只在 onSseFrame 生效，而 uiSession 边沿驱动的
+  // 本地 done 路径（maybeNotifyDone / completionUnread → notifyDone）无判定 →
+  // 多 agent 工作流时子代理完成会混进「任务已完成」通知。
+  // 修法：host 在 agent-start 帧捎带 childId → 浏览器半存 childAgentIds →
+  //      notifyDone 判定该 Set（下到最内层，覆盖绕过 maybeNotifyDone 的路径）。
+  {
+    localStorage.removeItem('dshPharos.config');
+    const r = m1Reload({ bag: { pageFocus: false } });
+    global.EventSource.instances.length = 0;
+    const ui = m1Apply(r);   // 返回 { sessions, status, tick }
+    const setUi = (id, st) => { ui.status.set(id, st); ui.tick(); };
+    const doneTitles = (from) => r.bag.notifications.slice(from)
+      .filter((n) => /已完成|finished|Task done/.test(n.title ?? ''));
+
+    // ① 先收到 agent-start 帧（带 childId）→ 浏览器半登记子代理
+    const es = r.ES.instances.at(-1);
+    if (es) {
+      es.dispatch(m1Frame('workflow', 'RUN-1', '启动 agent 读取员（第 1 个）',
+        { subtype: 'agent-start', childId: 'CHILD-1', sessionTitle: 'wf' }), 'pharos');
+      await m1Wait(40);
+    }
+    m1a(true, 'agent-start 帧（带 childId）已投递');
+
+    // ② 子代理会话 running true→false → 本地 done 路径 → 应被 skipSubagents 过滤
+    let before = r.bag.notifications.length;
+    setUi('CHILD-1', { running: true, pendingInteraction: undefined, completionUnread: false });
+    setUi('CHILD-1', { running: false, pendingInteraction: undefined, completionUnread: false });
+    await m1Wait(60);
+    m1a(doneTitles(before).length === 0,
+      `子代理完成 → 不弹「任务已完成」（实得 ${doneTitles(before).length} 条）`);
+
+    // ③ 对照：非子代理会话完成 → 照常弹（证明不是一刀切）
+    before = r.bag.notifications.length;
+    setUi('ROOT-1', { running: true, pendingInteraction: undefined, completionUnread: false });
+    setUi('ROOT-1', { running: false, pendingInteraction: undefined, completionUnread: false });
+    await m1Wait(60);
+    m1a(doneTitles(before).length === 1,
+      `非子代理完成 → 照常弹一次（对照组，实得 ${doneTitles(before).length} 条）`);
+
+    // ④ 关掉 skipSubagents → 子代理完成应恢复提醒（开关真的生效，非硬编码）
+    // 用另一个 childId：② 已给 CHILD-1 记过 lastDoneAt，minIntervalMs(6s) 会节流掉重复通知
+    r.context.window.__dshPharos.setConfig({ skipSubagents: false });
+    before = r.bag.notifications.length;
+    es.dispatch(m1Frame('workflow', 'RUN-1', '启动 agent 分析员（第 2 个）',
+      { subtype: 'agent-start', childId: 'CHILD-2', sessionTitle: 'wf' }), 'pharos');
+    await m1Wait(40);
+    setUi('CHILD-2', { running: true, pendingInteraction: undefined, completionUnread: false });
+    setUi('CHILD-2', { running: false, pendingInteraction: undefined, completionUnread: false });
+    await m1Wait(60);
+    m1a(doneTitles(before).length === 1,
+      `关掉 skipSubagents → 子代理完成恢复提醒（开关生效，实得 ${doneTitles(before).length} 条）`);
   }
 
   // ---- M1-B: 双源 done 去重（SSE done 与 uiSession done 同 key 只弹一次） ----

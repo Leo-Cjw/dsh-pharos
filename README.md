@@ -14,8 +14,9 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 | ❌ **运行出错** — agent 执行异常（`turn/end reason.kind=error`，`agent/error` 双轨兜底） | 系统通知 + **重低音三音** | 全时（v0.4，受 quiet hours / 过滤约束） |
 | ✂️ **被中断 / ⛽ 达到上限** — interrupted / limit | 系统通知 + 中音警示 | 全时（v0.4） |
 | 🛠️ **后台任务事件** — jobEvents（任务结束/移除） | 系统通知 | 默认开启，可关（v0.4） |
+| 🧭 **工作流进展** — workflowEvents（阶段推进 / agent 启动·结束） | 系统通知 | **默认关闭**，需在设置页开启（v0.6） |
 
-- **事件来源两条链路（v0.4 双半）**：浏览器半 `uiSession.sessionStatus`（需要你 / 回复完成，沿用 v0.3 语义）＋ host 半 **SSE**（`/pharos/api/stream`，`event: pharos` 命名帧：done / error / interrupted / limit / job / remote，内置 25s 心跳维持长连）——SSE 帧同时是 webhook 出站推送的事件源。
+- **事件来源两条链路（v0.4 双半）**：浏览器半 `uiSession.sessionStatus`（需要你 / 回复完成，沿用 v0.3 语义）＋ host 半 **SSE**（`/pharos/api/stream`，`event: pharos` 命名帧：done / error / interrupted / limit / job / remote / **workflow**，内置 25s 心跳维持长连）——SSE 帧同时是 webhook 出站推送的事件源。
 - **输出渠道**：系统通知 + 分音型提示音 + 标题标记/`⏳` 闪烁兜底（通知不可用时，6s）＋ **Webhook 出站推送**（可选：企微/飞书/钉钉加签 + 通用透传；5s 超时、指数退避重试、失败环形缓冲 50 条；受 quiet hours / events / 子代理过滤约束）。
 - 点通知：窗口回前台，并尽力打开对应会话（best-effort）。
 - 去重：SSE 帧级 2s 窗口 + **双源 done 去重**（SSE done 与 uiSession done 同会话只弹一次）+ 同会话节流（`minIntervalMs`，默认 6s）。
@@ -26,17 +27,20 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 
 ![系统通知横幅：回复完成，点击回到 DSH 查看](assets/screenshot-1-notification.png)
 
-![插件总览：灯塔图标与 v0.5.1 版本号](assets/screenshot-2-overview.png)
+![工作流提醒：阶段推进与多 agent 启动/结束通知（v0.6 新增，默认关闭）](assets/screenshot-2-workflow-notifications.png)
 
-![消息通知配置（一）：设置入口、标题行与基本设置](assets/screenshot-3-settings-basic.png)
+![插件详情页：灯塔图标、v0.6.0 版本徽章与完整说明](assets/screenshot-3-overview.png)
 
-![消息通知配置（二）：提醒时机、免打扰时段与过滤](assets/screenshot-4-settings-timing.png)
+![消息通知配置（一）：设置入口、标题行与基本设置](assets/screenshot-4-settings-basic.png)
 
-![消息通知配置（三）：Webhook 推送、高级、测试与 Debug](assets/screenshot-5-settings-filter-webhook.png)
+![消息通知配置（二）：提醒时机与当轮统计](assets/screenshot-5-settings-timing.png)
 
-![插件列表：与社区插件图标风格一致（深色）](assets/screenshot-6-plugins-dark.png)
+![消息通知配置（三）：免打扰时段、过滤（含工作流开关）、Webhook 推送与高级](assets/screenshot-6-settings-filter-webhook.png)
 
-> 图为 macOS 本机真实截图：系统通知横幅来自实际「回复完成」事件；设置页为顶级「消息通知」分区，左侧导航带灯塔图标，页面顶部标注 `dsh-pharos` 与版本号；三张设置页图完整覆盖全部 9 张配置卡片。
+![已安装插件列表：灯塔图标与社区插件图标风格一致（浅色）](assets/screenshot-7-plugins-light.png)
+
+> 图为 macOS 本机真实截图（v0.6.0）：系统通知横幅来自实际「回复完成」事件；设置页为顶级「消息通知」分区，左侧导航带灯塔图标，页面顶部标注 `dsh-pharos` 与版本号；三张设置页图完整覆盖全部 9 张配置卡片，其中「过滤」卡可见 v0.6 新增的**工作流提醒**与**工作流日志**两个开关（默认关，开启需重启 DSH）。
+工作流提醒图为真实多 agent 工作流（3 个并发 agent）的通知栈：标题统一为「工作流进展」、正文带工作流名 `multi-agent-audit`；最下方那条「任务已完成」是**主会话**整体完成（含耗时/tokens/缓存命中率），子代理自己的完成通知按 `skipSubagents` 过滤、不重复打扰。
 
 ## 配置
 
@@ -67,6 +71,8 @@ window.__dshPharos.setConfig({
   quietHours: { enabled: false, start: "23:00", end: "08:00" }, // 免打扰（跨午夜；静默屏幕渠道与 webhook）
   skipSubagents: true,         // 忽略子代理帧（host 半）
   jobEvents: true,             // 后台任务事件提醒（host 半）
+  workflowEvents: false,       // 工作流提醒（阶段/agent 事件；host 半，v0.6，默认关）
+  workflowLog: false,          // 工作流日志（高频旁白，只进调试队列不弹通知；v0.6，默认关）
   hostNotify: false,           // M1.5 预留：宿主原生 osascript 通知（本轮未实现）
   apiToken: "",                // 非空时 POST /pharos/api/trigger 须带 x-pharos-token 请求头
   webhooks: []                 // 出站 webhook 渠道配置（设置页管理）
@@ -123,7 +129,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 
 从 GitHub 克隆本仓库开发（`git clone git@github.com:Leo-Cjw/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
 
-- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 72 项：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致）；host 半：`node test/host.test.mjs`（164 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
+- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 102 项（v0.6.0）：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致）；host 半：`node test/host.test.mjs`（220 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
 - 发布流程：改 `lib/` 与 `package.json` → `node tools/sync-settings-view.mjs`（设置页视图内联进 client.js，`npm test` 前会自动执行）→ 跑测试 → 升版本 → `git push` + 打 tag → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention"|"done"|"error")` 验证
 - 架构文档：[functional-architecture.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
 - 架构图：[pharos-architecture.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-architecture.html)（浏览器半 × Host 半双层结构）· [pharos-sequence.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-sequence.html)（通知事件流）——浏览器打开即交互（主题切换/聚焦/导出）
@@ -168,6 +174,12 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 - 当轮统计（缓存命中率/TPS）依赖 host 半的官方投影 `ctx.sessionProjections`（`tokenUsage`/`sessionStats`）；投影不可用或插件中途启用（无 turn/start 基线）时静默降级为「仅耗时+tokens」，不报错。
 - 点通知"打开对应会话"为 best-effort（`sessions.binding(id)?.session.open()`），失败时仅聚焦窗口。
 - 宿主原生 osascript 通知（`hostNotify`）为 M1.5 预留，本轮未实现；webhook 需自行配置渠道（企微/飞书/钉钉机器人）。
+- **工作流提醒（v0.6）默认关闭**，需在设置页开启 `workflowEvents`；开启需**重启 DSH** 生效（订阅在启动时建立），关闭则即时生效。`workflowLog`（高频旁白）可**独立**开启，只进调试队列不弹通知。
+  → 完整效果、触发条件与排查步骤见 **[docs/sop-workflow-events.md](docs/sop-workflow-events.md)**（SOP）。 要实机验证？现成的工作流 prompt 见 **[docs/sop-verify-workflow-prompt.md](docs/sop-verify-workflow-prompt.md)**。
+  ⚠️ **普通对话不会产生工作流事件** —— 仅当模型执行多 agent 工作流任务、脚本调用 `phase()`/`agent()` 时才有提醒。
+- 工作流**帧本身**的 `agentType` 恒为 `root`，因此「跳过子代理事件」**对工作流提醒无效**—— 这是刻意取舍：若标 `subagent`，默认的 `skipSubagents=true` 会把整组提醒全部吞掉。
+  但**子代理会话自己**的「任务已完成」通知会被该开关正确过滤（v0.6.0 已修：host 在 `agent-start` 帧捎带 `childId`，浏览器半登记后过滤）。
+- 工作流「进入阶段」的去重键取阶段标题；若同一工作流在 3 秒内两次进入**同名**阶段，第二次不会重复提醒。
 
 ## License
 

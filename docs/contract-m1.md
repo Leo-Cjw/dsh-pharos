@@ -205,7 +205,7 @@ order 实测占用：general `0` / models `10` / plugins `15` / agent-presets `2
 
 ### 10.5 验收记录
 
-`node tools/sync-settings-view.mjs` 幂等（连跑两次 md5 一致）；`test/smoke.mjs` M1 72 项（含 M1-I 图标防漂移 6 条）、`test/host.test.mjs` 164 项全绿；`node --check` 通过；`npm pack --dry-run` 确认 `icon.svg` 入包；`local-plugins/dsh-pharos` 的 `lib/client.js` / `lib/settings-view.js` / `package.json` / `icon.svg` 与仓库 md5 一致。
+`node tools/sync-settings-view.mjs` 幂等（连跑两次 md5 一致）；`test/smoke.mjs` M1 102 项（v0.6.0 实测；含 M1-I 图标防漂移 6 条、M1-K 跨文件静态契约锁 19 条：HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 集合一致、TEST_KINDS ⊆ ALL_TEST_KINDS、pushDebugFrame 入队早于三道早退等）、`test/host.test.mjs` 220 项全绿；`node --check` 通过；`npm pack --dry-run` 确认 `icon.svg` 入包；`local-plugins/dsh-pharos` 的 `lib/client.js` / `lib/settings-view.js` / `package.json` / `icon.svg` 与仓库 md5 一致。
 
 **版本**：0.5.0 → **0.5.1**。用户可见行为变更（设置入口从「内置插件」分区内标签页升为顶级分区 + 新增灯塔图标），无新功能，故走 patch 位；`0.6.0` 留给 M2.5（`docs/m2.5-plan.md`）。`package.json` 的 description 同步改为「…a settings page in the Settings sidebar.」（原为 "a settings tab"，与新位置不符）。
 
