@@ -47,8 +47,9 @@
   工作流通知只聚焦窗口（`deliver` 里 `openSession` 仅对 `attention` 生效）。
 - ⚠️ 工作流**帧本身****不受**「跳过子代理事件」影响 —— 它的 `agentType` 恒为 `root`
   （刻意取舍，否则默认 `skipSubagents=true` 会把整组提醒吞掉）。
-  但**子代理会话自己**的「任务已完成」通知会被该开关正确过滤 —— host 在 `agent-start` 帧里
-  捎带 `childId`，浏览器半登记后据此过滤（v0.6.0 已修）。
+  但**子代理会话自己**的「任务已完成」通知会被该开关正确过滤 —— host 判出子代理后下发 sessionId
+  （workflow 子 agent 走 `agent-start` 帧的 `childId`；**普通 subagent 委派**走 `agents` 元信息帧的
+  `subagentSessionIds`，**v0.6.1 起支持**）。
 - ❌ **不会**做累计统计或历史图表 —— 坚持「当轮/逐事件」口径，不落库。
 
 ### 1.4 去重规则（可能让你少收一条）

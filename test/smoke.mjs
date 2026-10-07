@@ -216,7 +216,7 @@ const count = (title) => notifications.filter((x) => x.title === title).length;
 
 apply(ctx);
 console.log('bundle name/inject:', name, JSON.stringify(inject));
-assert(window.__dshPharos?.version === '0.6.0', '控制台 API 更名为 __dshPharos v0.6.0');
+assert(window.__dshPharos?.version === '0.6.1', '控制台 API 更名为 __dshPharos v0.6.1');
 
 // baseline
 assert(notifications.length === 0, '基线不弹');
@@ -336,6 +336,15 @@ cleanup?.();
 let m1Failed = 0;
 let m1Passed = 0;
 const m1a = (cond, msg) => { if (!cond) { m1Failed++; console.error('M1-FAIL:', msg); } else { m1Passed++; console.log('M1 ok :', msg); } };
+  // ⚠️ 静态禁令类断言必须在**剥掉注释**后再搜：否则 applyStyle 的注释里写的反例
+  //    会被当成违规。多个段（M1-P / M1-Q）共用，故提升到 M1 段作用域。
+  const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  // v0.6.1：test() 走 bypass → 强制**页内 toast**；真实事件走**系统通知**。
+  // 断言「用户看得见反馈」必须同时认这两条通道，故统一用下面三个辅助。
+  const toastBoxOf = (r) => r.docBody?.find?.((c) => c && c.id === 'dsh-pharos-toast-box');
+  const toastCount = (r) => toastBoxOf(r)?.children?.length ?? 0;
+  const toastText = (el) => [].concat(el?.children ?? []).map((c) => c?.textContent ?? '').join(' | ');
+  const lastToastText = (r) => toastText(toastBoxOf(r)?.children?.at?.(-1));
 const m1Wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- M1-I: 标记几何防漂移（icon.svg ↔ lib/client.js 的 PHAROS_MARK_*）----
@@ -534,21 +543,40 @@ if (!m1Ready) {
 
   // ---- M1-L: test(kind) 覆盖 workflow（缺陷回归：ALL_TEST_KINDS 漏 workflow 时，
   // 设置页「测试通知」选「工作流」会落 else 分支弹出「完成」——按钮骗人）----
+  // ⚠️ v0.6.1：test() 走 bypass → 强制**页内 toast**（系统通知不在页面上、可能被横幅吞掉），
+  //    故断言对象从 bag.notifications 改为 docBody（toast 容器）。这是「用户点按钮能看见反馈」
+  //    的真正契约 —— 之前只查系统通知，恰恰漏掉了用户实际看到的那条通道。
   {
     const r = m1Reload();
     m1Apply(r);                       // 必须 apply 才装 __dshPharos（与 M2-A 段同范式）
     const api = r.context.window.__dshPharos;
     m1a(!!api, 'apply 后 __dshPharos 可用');
     if (api) {
-      const before = r.bag.notifications.length;
-      api.test('workflow');
+      // m1Reload 已给全新 vm 上下文（body 是新的），这里只记基线；toast 计数在断言时现取。
+      const sysBefore = r.bag.notifications.length;
+      const boxBefore = r.docBody?.find?.((c) => c && c.id === 'dsh-pharos-toast-box');
+      const toastBefore = boxBefore?.children?.length ?? 0;
+      const ret = api.test('workflow');
       await m1Wait(40);
-      m1a(r.bag.notifications.length === before + 1, "test('workflow') 弹一次通知");
-      const n = r.bag.notifications.at(-1);
-      m1a(!!n && /工作流|Workflow/.test(n.title ?? ''),
-        `test('workflow') 标题是工作流文案（实得：${n?.title}）`);
-      m1a(!!n && !/已完成|任务完成|Task done/.test(n.title ?? ''),
-        `test('workflow') 未落 else 兜底（实得：${n?.title}）`);
+      m1a(ret === 'workflow', `test('workflow') 回显实际 kind（实得：${ret}）`);
+      // 差值断言（对累积免疫）：toast box 由 toastBoxEl 惰性创建，取 box 的 children 数
+      const toastBoxEl2 = r.docBody?.find?.((c) => c && c.id === 'dsh-pharos-toast-box')
+        ?? r.docBody?.[0];
+      const toastCount = toastBoxEl2?.children?.length ?? 0;
+      m1a(toastCount - toastBefore === 1,
+        `test('workflow') 产出一条页内反馈（bypass 通道，delta=${toastCount - toastBefore}）`);
+      m1a(r.bag.notifications.length === sysBefore,
+        'test() 不再走系统通知（bypass 固定页内，避免「点了像没反应」）');
+      // toast 容器是 append 到 body 的 #dsh-pharos-toast-box（body.children[0]），
+      // 真正的 toast 在它的 children 里；每个 toast 的文案在其子元素上（[0]=标题/[1]=正文）。
+      const toastBox = r.docBody?.[0];
+      const firstToast = toastBox?.children?.[0];
+      const toastText = (el) => [].concat(el?.children ?? []).map((c) => c?.textContent ?? '').join(' | ');
+      const dom = toastText(firstToast);
+      m1a(/工作流|Workflow/.test(dom),
+        `test('workflow') 页内反馈是工作流文案（实得：${dom.slice(0, 40)}）`);
+      m1a(!/已完成|任务完成|Task done/.test(dom),
+        `test('workflow') 未落 else 兜底（实得：${dom.slice(0, 40)}）`);
     }
   }
 
@@ -604,6 +632,180 @@ if (!m1Ready) {
     await m1Wait(60);
     m1a(doneTitles(before).length === 1,
       `关掉 skipSubagents → 子代理完成恢复提醒（开关生效，实得 ${doneTitles(before).length} 条）`);
+  }
+
+  // ---- M1-N: 设置页「测试」按钮契约锁（静态）----
+  // 缺陷背景：用户点「完成」没反应。根因排查发现设置视图在 sandbox 里不挂载，
+  // 无法做点击模拟；而 data-pharos-test 此前**零测试覆盖** —— 按钮掉了 onClick
+  // 也不会有任何断言失败。故用静态契约锁住「按钮结构完整 + onClick 真的绑到 onTest」，
+  // 配合 M1-L/M1-G 的行为断言（test() 走 bypass 产页内反馈）构成两道防线。
+  {
+    // ① 按钮由 TEST_KINDS 渲染，每项都带 data-pharos-test + onClick
+    const btnBlock = src.match(/TEST_KINDS\.map\(function \(k\) \{([\s\S]*?)\}\)/)?.[1] ?? '';
+    m1a(btnBlock.length > 0, '设置页测试按钮由 TEST_KINDS.map 渲染（找到渲染块）');
+    m1a(btnBlock.includes('onClick: function () { onTest(k.value); }'),
+      '每个测试按钮的 onClick 绑定到 onTest(k.value)（防 onClick 丢失）');
+    m1a(btnBlock.includes('"data-pharos-test": k.value'),
+      '每个测试按钮带 data-pharos-test（供 e2e / 手工定位）');
+    // ② onTest 成功与失败两条分支都要写 debug —— 否则「点了没反应」无从排查
+    const onTestBlock = src.slice(src.indexOf('function onTest(kind)'), src.indexOf('function onDebugRefresh'));
+    m1a(onTestBlock.length > 0 && onTestBlock.includes('debugLog("test(" + kind'),
+      'onTest 首行写 debugLog（点按钮必有第一行记录）');
+    m1a(onTestBlock.includes('configApi.test 不可用'),
+      'onTest 有「api 不可用」兜底分支并写 debug（不留静默失败）');
+    m1a(onTestBlock.includes('实际 kind='),
+      'onTest 回显实际触发的 kind（v0.6.1：点完能看到到底触发了什么）');
+    // ③ test() 必须传 bypass —— 缺了就会被 quietHours / doneHiddenOnly 静默
+    const testImpl = src.slice(src.indexOf('test: (kind, stats)'), src.indexOf('debug: () =>'));
+    m1a(testImpl.includes('bypass: true'),
+      'test() 传 bypass: true（测试不受静默策略影响，且强制页内反馈）');
+    // ④ deliver 的 bypass 分支必须置 toasting —— 否则页内 toast 会弹两条
+    const deliverBlock = src.slice(src.indexOf('function deliver('), src.indexOf('// ---- tracking state ----'));
+    m1a(/if \(bypass\) \{[\s\S]*?toasting = true;/.test(deliverBlock),
+      'deliver 的 bypass 分支置 toasting=true（防页内 toast 重复弹两条）');
+  }
+
+  // ---- M1-O: agents 元信息帧 → 过滤**普通** subagent 的本地 done（v0.6.1）----
+  // 缺陷背景：v0.6.0 只能用 workflow/agent-start 帧的 childId 识别子代理，
+  // 而普通 subagent 委派（agent/* 工具派生，不经 workflow）不产 workflow 帧 →
+  // 浏览器半永远识别不了，子代理完成通知会混进「任务已完成」。
+  // 修法：host 判出 agentTypeOf==='subagent' → agents 帧下发 subagentSessionIds。
+  {
+    localStorage.removeItem('dshPharos.config');
+    const r = m1Reload({ bag: { pageFocus: false } });
+    global.EventSource.instances.length = 0;
+    const ui = m1Apply(r);
+    const setUi = (id, st) => { ui.status.set(id, st); ui.tick(); };
+    const es = r.ES.instances.at(-1);
+    const doneCount = (from) => r.bag.notifications.slice(from)
+      .filter((n) => /已完成|finished|Task done/.test(n.title ?? '')).length;
+
+    // ① host 下发 agents 帧（子代理 G-1）
+    if (es) {
+      es.dispatch(m1Frame('agents', 'agents', '子代理登记',
+        { subagentSessionIds: ['G-1'], silent: true }), 'pharos');
+      await m1Wait(40);
+    }
+    // ② 该子代理的会话跑完 → 本地 done 路径 → 应被过滤
+    let before = r.bag.notifications.length;
+    setUi('G-1', { running: true, pendingInteraction: undefined, completionUnread: false });
+    setUi('G-1', { running: false, pendingInteraction: undefined, completionUnread: false });
+    await m1Wait(60);
+    m1a(doneCount(before) === 0,
+      `agents 帧登记的子代理完成 → 不弹「任务已完成」（实得 ${doneCount(before)} 条）`);
+
+    // ③ 对照：未登记的会话完成 → 照常弹（证明不是一刀切）
+    before = r.bag.notifications.length;
+    setUi('G-2', { running: true, pendingInteraction: undefined, completionUnread: false });
+    setUi('G-2', { running: false, pendingInteraction: undefined, completionUnread: false });
+    await m1Wait(60);
+    m1a(doneCount(before) === 1,
+      `未登记的会话完成 → 照常弹（对照组，实得 ${doneCount(before)} 条）`);
+
+    // ④ agents 帧累积多个 id（host 每次新增子代理都下发全量）
+    if (es) {
+      es.dispatch(m1Frame('agents', 'agents', '子代理登记',
+        { subagentSessionIds: ['G-1', 'G-2', 'G-3'], silent: true }), 'pharos');
+      await m1Wait(40);
+      before = r.bag.notifications.length;
+      setUi('G-3', { running: true, pendingInteraction: undefined, completionUnread: false });
+      setUi('G-3', { running: false, pendingInteraction: undefined, completionUnread: false });
+      await m1Wait(60);
+      m1a(doneCount(before) === 0,
+        `agents 列表扩充后新子代理也被过滤（实得 ${doneCount(before)} 条）`);
+    }
+  }
+
+  // ---- M1-P: v0.6.1 契约锁：本地时间戳 + 不用 el.style 对象赋值 ----
+  // 两条都来自真机暴露的缺陷（自动化测试全绿但真机不可用）：
+  {
+    // ① debugLog 必须用**本地**时间：toISOString() 是 UTC，东八区差 8 小时
+    const logBlock = codeOnly.slice(codeOnly.indexOf('function debugLog'), codeOnly.indexOf('function traceError'));
+    m1a(!logBlock.includes('toISOString()'),
+      'debugLog 不用 toISOString（那是 UTC，会比本地时间差一个时区）');
+    m1a(logBlock.includes('getHours()') && logBlock.includes('getMinutes()'),
+      'debugLog 用 getHours/getMinutes 取本地时间');
+    // ② 禁止 el.style = {...}：真实 DOM 里 el.style 是只读 CSSStyleDeclaration，
+    //    非严格模式下赋值**静默失败** → 元素创建了却无样式（透明、无固定定位），
+    //    表现为「点了测试按钮什么都没出现」。测试桩是普通对象（style 可写）故测不出。
+    // 排除 applyStyle 函数体自身（它的 fallback 分支就是给测试桩用的。真机有 setProperty 分支，
+    // 且 assignInside 断言会再锁一次「setProperty 分支在赋值分支之前」）。
+    const applyStyleStart = codeOnly.indexOf('function applyStyle(');
+    const applyStyleEnd = codeOnly.indexOf('function toastBoxEl(', applyStyleStart);
+    const outsideApplyStyle = codeOnly.slice(0, applyStyleStart) + codeOnly.slice(applyStyleEnd);
+    const styleAssigns = outsideApplyStyle.match(/\w+\.style = \{/g) ?? [];
+    m1a(styleAssigns.length === 0,
+      `applyStyle 之外无 \w+.style = { 赋值（真实 DOM 静默失败；实得 ${styleAssigns.length} 处）`);
+    const applyStyleBody = codeOnly.slice(applyStyleStart, applyStyleEnd);
+    m1a(applyStyleBody.indexOf('setProperty') < applyStyleBody.indexOf('el.style ='),
+      'applyStyle 里 setProperty 分支在对象赋值分支**之前**（真机优先走对的那条）');
+    m1a(codeOnly.includes('function applyStyle('), '有 applyStyle 辅助（逐条 setProperty）');
+    m1a(/if \(el\.style && typeof el\.style\.setProperty === "function"\)/.test(codeOnly),
+      'applyStyle 优先用 setProperty（真实 CSSStyleDeclaration 路径）');
+  }
+
+  // ---- M1-Q: v0.6.1「完成」提醒三档（off / hidden / always + 向后兼容映射）----
+  // 背景：原设计只有二档 checkbox（doneHiddenOnly 布尔），无法表达「关」与「始终」两端。
+  // 竞品（VS Code windowNotFocused / Codex unfocused / ChatGPT background）均为三档且
+  // 默认 hidden。v0.6.1 加 doneNotifyMode，旧字段按布尔映射以保证老配置行为不变。
+  {
+    localStorage.removeItem('dshPharos.config');
+    const r = m1Reload({ bag: { pageFocus: true } });   // 页面在前台
+    global.EventSource.instances.length = 0;
+    const ui = m1Apply(r);
+    const api = r.context.window.__dshPharos;
+    const setUi = (id, st) => { ui.status.set(id, st); ui.tick(); };
+    const runDone = async (sid) => {
+      const before = r.bag.notifications.length;
+      setUi(sid, { running: true, pendingInteraction: undefined, completionUnread: false });
+      setUi(sid, { running: false, pendingInteraction: undefined, completionUnread: false });
+      await m1Wait(60);
+      return r.bag.notifications.length - before;
+    };
+
+    // ① 默认 hidden：页面前台 → 不提醒
+    let n = await runDone('D1');
+    m1a(n === 0, `默认档（hidden）页面在前台 → 不提醒（实得 ${n} 条）`);
+
+    // ② always：页面前台 → 提醒
+    api.setConfig({ doneNotifyMode: 'always', doneHiddenOnly: false });
+    n = await runDone('D2');
+    m1a(n === 1, `always 档页面在前台 → 提醒（实得 ${n} 条）`);
+
+    // ③ off：页面**在前台**也不提醒（只测 hidden 会漏掉这条独立判定）
+    api.setConfig({ doneNotifyMode: 'off', doneHiddenOnly: true });
+    n = await runDone('D3');
+    m1a(n === 0, `off 档页面在前台 → 不提醒（实得 ${n} 条）`);
+
+    // ③b off：**页面隐藏时也不提醒** —— 这是 off 与 hidden 的唯一区别，
+    //      若实现里 off 落到 hidden 分支，这里会误报 1 条。
+    r.bag.pageFocus = false;                       // 切到后台
+    n = await runDone('D3b');
+    m1a(n === 0, `off 档页面在后台 → 也不提醒（off 与 hidden 的区别，实得 ${n} 条）`);
+    r.bag.pageFocus = true;                        // 复位
+
+    // ③c hidden 在后台**要**提醒（与 ③b 构成对照，证明 hidden 档没被误关）
+    api.setConfig({ doneNotifyMode: 'hidden', doneHiddenOnly: true });
+    r.bag.pageFocus = false;
+    n = await runDone('D3c');
+    m1a(n === 1, `hidden 档页面在后台 → 提醒（对照组，实得 ${n} 条）`);
+    r.bag.pageFocus = true;
+
+    // ④ 向后兼容：只有旧字段 doneHiddenOnly=false（老 0.6.0 配置）→ 等价 always
+    api.setConfig({ doneNotifyMode: undefined, doneHiddenOnly: false });
+    n = await runDone('D4');
+    m1a(n === 1, `旧配置 doneHiddenOnly=false → 映射 always（实得 ${n} 条）`);
+
+    // ⑤ 向后兼容：旧配置 doneHiddenOnly=true → 等价 hidden
+    api.setConfig({ doneNotifyMode: undefined, doneHiddenOnly: true });
+    n = await runDone('D5');
+    m1a(n === 0, `旧配置 doneHiddenOnly=true → 映射 hidden（实得 ${n} 条）`);
+
+    // ⑥ 设置页下拉存在且三档齐全（静态锁，防 UI 漏一档）
+    m1a(/value: "off"[\s\S]*value: "hidden"[\s\S]*value: "always"/.test(codeOnly),
+      '设置页「完成」提醒时机下拉含 off/hidden/always 三档');
+    m1a(codeOnly.includes('patchConfig({ doneNotifyMode: v, doneHiddenOnly: v !== "always" })'),
+      '下拉同时写 doneHiddenOnly（旧主机侧/旧版本仍能读）');
   }
 
   // ---- M1-B: 双源 done 去重（SSE done 与 uiSession done 同 key 只弹一次） ----
@@ -757,11 +959,14 @@ if (!m1Ready) {
     m1Apply(r);
     const api = r.context.window.__dshPharos;
     for (const kind of ['error', 'interrupted', 'limit']) {
-      const before = r.bag.notifications.length;
+      const sysBefore = r.bag.notifications.length;
+      const toastBefore = toastCount(r);
       api.test(kind);
       await m1Wait(40);
-      m1a(r.bag.notifications.length === before + 1, `test('${kind}') 触发通知`);
-      m1a(frameTitle(kind).test(r.bag.notifications.at(-1)?.title ?? '') === true, `test('${kind}') 标题匹配文案`);
+      m1a(toastCount(r) - toastBefore === 1, `test('${kind}') 产出一条页内反馈（delta=${toastCount(r) - toastBefore}）`);
+      m1a(r.bag.notifications.length === sysBefore, `test('${kind}') 不发系统通知（bypass 固定页内）`);
+      m1a(frameTitle(kind).test(lastToastText(r)) === true,
+        `test('${kind}') 标题匹配文案（实得：${lastToastText(r).slice(0, 30)}）`);
     }
   }
 
@@ -812,8 +1017,9 @@ if (!m1Ready) {
     const persisted = JSON.parse(localStorage.getItem('dshPharos.stats') || 'null');
     m1a(persisted && persisted.tokens === 240, 'localStorage dshPharos.stats 兜底已写');
     // P1-1：通知正文含统计文本（test 路径 done 分支把 statsSummaryOf 织进 summary）
-    const body = r.bag.notifications.at(-1)?.body ?? '';
-    m1a(body.includes('缓存命中 14%') && body.includes('13.3 tok/s'), 'test(kind, stats) 通知正文含统计文本');
+    const body = lastToastText(r);   // v0.6.1：test() 走页内 toast
+    m1a(body.includes('缓存命中 14%') && body.includes('13.3 tok/s'),
+      `test(kind, stats) 反馈正文含统计文本（实得：${body.slice(0, 60)}）`);
   }
 
   // ---- M2-B: SSE 帧带统计字段 → stats 更新 + pharos:stats 事件 ----

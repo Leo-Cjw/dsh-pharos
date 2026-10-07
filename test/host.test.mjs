@@ -911,12 +911,58 @@ if (!stats) {
   disposer();
 }
 
+// ---- 16e. v0.6.1 白盒：agents 元信息帧（subagentSessionIds 下发）----
+{
+  const a = frames.makeFrame({ kind: 'agents', subagentSessionIds: ['S1', 'S2'], note: '子代理登记' });
+  assert(a.kind === 'agents', 'makeFrame 支持 agents kind');
+  assert(a.severity === 'info', 'agents 帧 severity=info');
+  assert(Array.isArray(a.subagentSessionIds) && a.subagentSessionIds.length === 2, 'agents 帧展开 subagentSessionIds');
+  assert(!('subagentSessionIds' in frames.makeFrame({ kind: 'agents', note: '空' })), '空列表 → 不展开该字段');
+  assert(!('subagentSessionIds' in frames.makeFrame({ kind: 'done', note: 'x' })), '非 agents 帧不带 subagentSessionIds');
+  // agentTypeOf 必须能判普通 subagent（v0.6.1 的登记依据）
+  assert(frames.agentTypeOf({ header: { origin: 'subagent' } }) === 'subagent', 'agentTypeOf 认 origin=subagent');
+  assert(frames.agentTypeOf({ header: { delegationDepth: 1 } }) === 'subagent', 'agentTypeOf 认 delegationDepth=1');
+  assert(frames.agentTypeOf({ header: { parentSession: 'P' } }) === 'subagent', 'agentTypeOf 认 parentSession');
+  assert(frames.agentTypeOf({ header: {} }) === 'root', '无子代理标记 → root');
+}
+
 // ---- 16d. M2.5 白盒：agent-start 帧捎带 childId（浏览器半据此过滤本地 done）----
 {
   const wf = frames.makeFrame({ kind: 'workflow', subtype: 'agent-start', childId: 'CHILD-7', note: '启动 agent 采集员（第 1 个）' });
   assert(wf.childId === 'CHILD-7', 'makeFrame 展开 childId（浏览器半过滤本地 done 的判据）');
   assert(!('childId' in frames.makeFrame({ kind: 'workflow', note: 'x' })), '未传 childId → 帧不含该字段');
   assert(!('childId' in frames.makeFrame({ kind: 'done', note: 'x' })), '非 workflow 帧不带 childId');
+}
+
+// ---- 16f. v0.6.1 黑盒：普通 subagent 会话事件 → agents 帧下发 subagentSessionIds ----
+{
+  const { ctx, disposer } = setup();
+  const { res, done } = openStream(ctx);
+  await done;
+  const fire = (session, type) => ctx.handlers.get('session/event')(session, { type, data: {} });
+  // 子代理会话（header.origin=subagent）——普通委派，不经 workflow
+  const child = { id: 'CHILD-A', header: { origin: 'subagent', delegationDepth: 1 } };
+  fire(child, 'turn/start');
+  await wait(60);
+  const frames = sseFrames(res);
+  const af = frames.find((x) => x.kind === 'agents');
+  assert(!!af, 'subagent 会话事件产出 agents 元信息帧');
+  assert(af && af.silent === true, 'agents 帧带 silent（不打扰用户）');
+  assert(af && Array.isArray(af.subagentSessionIds) && af.subagentSessionIds.includes('CHILD-A'),
+    `agents 帧捎带子代理 sessionId（实得：${JSON.stringify(af?.subagentSessionIds)}）`);
+  // 第二个子代理 → 列表累积
+  fire({ id: 'CHILD-B', header: { origin: 'subagent', delegationDepth: 1 } }, 'turn/start');
+  await wait(60);
+  const later = sseFrames(res).filter((x) => x.kind === 'agents').at(-1);
+  assert(later && later.subagentSessionIds.length === 2,
+    `agents 列表累积（实得 ${later?.subagentSessionIds?.length} 个）`);
+  // 主会话不应触发
+  const before = sseFrames(res).filter((x) => x.kind === 'agents').length;
+  fire({ id: 'ROOT-X', header: {} }, 'turn/start');
+  await wait(60);
+  const after = sseFrames(res).filter((x) => x.kind === 'agents').length;
+  assert(after === before, '主会话不产出 agents 帧（只登记子代理）');
+  disposer();
 }
 
 // ---- 17. rate limit 常量 + host 默认 ----
@@ -948,6 +994,23 @@ if (!stats) {
   // agent 子类按 seq 区分
   assert(frames.dedupeKeyOf('workflow', 'C1', 'agent-start:1') !== frames.dedupeKeyOf('workflow', 'C1', 'agent-start:2'),
     '不同 seq 的 agent-start dedupeKey 不相同');
+}
+
+// ---- 23. v0.6.1 白盒：{time} 必须是**本地**时间（曾用 toISOString → UTC，差一个时区）----
+{
+  // 用户实测：钉钉收到「时间：2026-10-07T13:01:33.217Z」，实际本地时间是 21:01（东八区差 8h）
+  const ts = Date.parse('2026-10-07T13:01:33.217Z');
+  const f = { ts, sessionTitle: '你好', note: 'n', durationMs: 112000 };
+  const local = webhook.renderTemplate('{time}', f);
+  const iso = webhook.renderTemplate('{isoTime}', f);
+  assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(local), `{time} 为「YYYY-MM-DD HH:mm:ss」本地格式（实得 ${local}）`);
+  assert(local.endsWith('21:01:33'), `{time} 反映本地时间 21:01（实得 ${local}）`);
+  assert(iso === '2026-10-07T13:01:33.217Z', `{isoTime} 保留 UTC（实得 ${iso}）`);
+  assert(local.slice(0, 10) === '2026-10-07', '{time} 的日期部分为本地日期');
+  assert(!local.includes('T') && !local.includes('Z'), '{time} 不含 ISO 的 T/Z 标记（那会让读者以为是 UTC）');
+  const both = webhook.renderTemplate('{time} | {isoTime}', f);
+  assert(both.startsWith('2026-10-07 21:01:33'), `{time} 与 {isoTime} 可并存（实得 ${both}）`);
+  assert(webhook.renderTemplate('{time}', {}).length === 19, '{time} 缺 ts 时也输出完整本地时间戳');
 }
 
 // ---- 19. M2.5 白盒：renderTemplate 的 {cache}/{tps} 两 token ----
