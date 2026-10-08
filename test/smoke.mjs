@@ -181,7 +181,19 @@ function reload(overrides = {}) {
   const bundle = cap.factory(() => { throw new Error('unexpected require'); });
   return { context, bundle, ES: ESCls, fetchStub: null, bag, docBody: doc.bodyChildren };
 }
-vm.runInThisContext(src, { filename: 'client.js' });
+// 语法错误在这里会抛出裸 SyntaxError，看不出「是 client.js 坏了」还是「测试自身有问题」，
+// 且报错栈只到 vm 内部，容易被误读成断言全绿（反向验证时已踩过一次）。
+// 包一层：明确指出是 lib/client.js 解析失败，并给出最常见成因与排查命令。
+try {
+  vm.runInThisContext(src, { filename: 'client.js' });
+} catch (error) {
+  if (!(error instanceof SyntaxError)) throw error;
+  console.error('FAIL: lib/client.js 解析失败（SyntaxError）—— 测试无法开始，所有断言都没跑。');
+  console.error(`      位置：${String(error.message).split('\n')[0]}`);
+  console.error('      最常见原因：改了 lib/settings-view.js 却没跑 node tools/sync-settings-view.mjs；');
+  console.error('      或内联区被手工改坏。排查：node --check lib/client.js');
+  process.exit(1);
+}
 const bundle = captured.factory(() => { throw new Error('unexpected require'); });
 const { name, inject, apply } = bundle;
 
@@ -511,6 +523,21 @@ const frameTitle = (kind) => {
 const m1Ready = global.EventSource.instances.length > 0 && typeof window.__dshPharos === 'object'
   && typeof window.__dshPharos.test === 'function';
 if (!m1Ready) {
+  // v0.3 起 client.js 必然注册 __dshPharos —— 走到这里只有一种可能：文件语法错误 /
+  // 内联区未同步，导致 sandbox 里 evaluate 失败。此前这个分支只打印 skip 并以 0 退出，
+  // 反向验证时「破坏代码 → 整段 M1 被静默跳过 → 摘要仍显示全绿」，假阴性极难察觉。
+  // 故改为硬失败，并把「源码里根本没有 SSE 消费实现」这一唯一合法豁免单独放行。
+  const srcRaw = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
+  const hasImpl = /__dshPharos/.test(srcRaw);
+  console.error('FAIL: M1 浏览器扩展组未能加载 —— client.js 已包含实现却不注册 __dshPharos。');
+  console.error('      最常见原因：lib/settings-view.js 改后未跑 node tools/sync-settings-view.mjs，');
+  console.error('      或内联区被手工改坏导致 lib/client.js 语法错误（先跑 node --check lib/client.js）。');
+  console.error(`      源码是否含实现：${hasImpl ? '含（→ 是加载失败）' : '不含（→ 尚未实现，可豁免）'}`);
+  if (hasImpl) {
+    m1Failed++;
+    console.log(`\n${failed} 项失败（v0.3）+ ${m1Failed} 项失败（M1）`);
+    process.exit(1);
+  }
   console.log('skip : M1 浏览器扩展组暂跳过 —— client.js 尚未实现 SSE/新 kind（仍为 v0.3），等 pharos-client 交付后自动生效');
   console.log('skip : 覆盖项：SSE 帧消费(done/error/interrupted/limit/job/remote) / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展');
 } else {
@@ -806,6 +833,318 @@ if (!m1Ready) {
       '设置页「完成」提醒时机下拉含 off/hidden/always 三档');
     m1a(codeOnly.includes('patchConfig({ doneNotifyMode: v, doneHiddenOnly: v !== "always" })'),
       '下拉同时写 doneHiddenOnly（旧主机侧/旧版本仍能读）');
+  }
+
+  // ---- M1-R: 设置页布局契约锁（v0.6.1 真机截图暴露：标签被 select 挤成竖排）----
+  // .pharos-field 是 display:flex，控件（尤其 option 文案长的 select，如三档下拉的
+  // 「仅页面隐藏时提醒（默认）」）会撑大并把左侧标签压成逐字竖排、互相重叠。
+  // 修法：给首个 span 与 select 都加 flex-shrink 保护。
+  {
+    m1a(/\.pharos-field>span:first-child\{flex:0 0 auto\}/.test(codeOnly),
+      '首个 span 标签有 flex 收缩保护（不被控件挤压）');
+    m1a(/\.pharos-field select\{flex:0 0 auto;max-width:100%\}/.test(codeOnly),
+      'select 有 flex:0 0 auto + max-width（不撑破容器、不无限挤压标签）');
+    // 三档下拉的 option 文案较长，是触发该 bug 的直接原因 —— 锁住它不会变长
+    m1a(codeOnly.includes('仅页面隐藏时提醒（默认）'),
+      '三档下拉的最长 option 文案存在（回归时会再次触发挤压）');
+  }
+
+  // ---- M1-S: 模板预设三档 UI（v0.6.2）----
+  // 设置视图在 sandbox 不挂载，无法点击模拟 → 用静态契约锁住「预设档齐全 + 仅自定义展开编辑区」。
+  {
+    m1a(codeOnly.includes('var TEMPLATE_PRESET_CONCISE ='), '内置「简洁」预设常量');
+    m1a(codeOnly.includes('var TEMPLATE_PRESET_DETAIL ='), '内置「详细」预设常量');
+    m1a(codeOnly.includes('function templatePresetOf(tpl)'), '有 templatePresetOf 判定（按内容全等，不新增字段）');
+    m1a(/\{ id: "concise"/.test(codeOnly) && /\{ id: "detail"/.test(codeOnly) && /\{ id: "custom"/.test(codeOnly),
+      '预设三档：concise / detail / custom');
+    m1a(codeOnly.includes('name: "pharos-tpl-" + row._key'),
+      'radio 的 name 按行隔离（多行 webhook 互不串档）');
+    // 编辑区只在 custom 档渲染 —— 断言「条件表达式在、且确实包着 textarea」，
+    // 不能只 includes 那个字符串（去掉条件后字符串仍留在文件里，会假通过）。
+    const tplBlock = codeOnly.slice(codeOnly.indexOf('className: "pharos-template-block"'));
+    const editGuard = tplBlock.slice(0, tplBlock.indexOf('"data-pharos-field": "template"'));
+    m1a(/preset === "custom"\s*\?\s*h\("div"/.test(editGuard),
+      '模板编辑区受 preset === "custom" 条件守卫（简洁/详细不显示 textarea）');
+    m1a(/preset === "custom"\s*\?\s*h\("p"/.test(tplBlock),
+      '变量清单同样只在自定义档显示');
+
+    // ---- void 元素 children 契约（#137 真机崩溃的门禁）----
+    // 真机报 React #137「input is a void element tag and must neither have children」，
+    // 整页设置打不开。根因：h() 无条件把 children 作为第三参传给 createElement ——
+    // 无子节点时传的是**空数组**，React 仍判定「有 children」→ void 元素直接抛。
+    // 静态断言（"有没有 if children.length === 0"）只能锁形状、锁不住语义，
+    // 故这里用**模拟 React 真实判定**的迷你 createElement 实跑一遍 h()。
+    {
+      const VOID_TAGS = new Set(['input', 'img', 'br', 'hr', 'meta', 'link', 'source', 'track', 'area', 'base', 'embed', 'param', 'col', 'wbr']);
+      // 与 React 一致：第三参为 undefined 表示无 children；空数组视为有 children
+      const fakeCreateElement = (type, props, ...kids) => {
+        const hasKids = kids.length > 0 && kids[0] !== undefined;
+        if (VOID_TAGS.has(String(type).toLowerCase()) && hasKids) {
+          throw new Error(`${type} is a void element tag and must neither have \`children\` nor use \`dangerouslySetInnerHTML\`.`);
+        }
+        return { type, props: props ?? null, kids };
+      };
+      // 从源码里抽出 h() 的真实实现来跑，避免「测的是重写版、不是线上那版」。
+      // 用花括号配平截取函数体（按行/缩进截会切错：函数内有 if/嵌套块）。
+      const hStart = src.indexOf('function h(tag, props) {');
+      let depth = 0, hEnd = -1;
+      for (let i = src.indexOf('{', hStart); i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (depth === 0) { hEnd = i + 1; break; } }
+      }
+      m1a(hStart >= 0 && hEnd > hStart, '能从 client.js 定位并截取 h() 源码（门禁桩的前提）');
+      const h = new Function('React', `${src.slice(hStart, hEnd)}; return h;`)({ createElement: fakeCreateElement });
+
+      let voidOk = true, voidMsg = '';
+      try { h('input', { type: 'radio', name: 'x' }); } catch (e) { voidOk = false; voidMsg = e.message; }
+      m1a(voidOk, 'h() 渲染无子节点的 input（模板预设 radio）不抛 #137 —— ' + (voidOk ? '' : voidMsg));
+
+      let spanOk = true;
+      try { h('span', null, '标签'); } catch (e) { spanOk = false; }
+      m1a(spanOk, 'h() 传单个子节点仍正常（有 children 的元素不受影响）');
+
+      let twoOk = true;
+      try { h('div', null, 'a', 'b'); } catch (e) { twoOk = false; }
+      m1a(twoOk, 'h() 传多个子节点仍正常');
+
+      // 反向自检：把 children 无条件传出的写法塞进去，必须抛 —— 证明上面那个桩真能抓
+      let probeThrew = false;
+      try { fakeCreateElement('input', null, []); } catch (e) { probeThrew = true; }
+      m1a(probeThrew, '门禁桩自身有效：空数组 children 会让 void 元素抛错（非空断言）');
+    }
+
+    // ---- 「自定义」档可进可退（真机 bug：点自定义后立刻弹回，永远进不去）----
+    // 根因：templatePresetOf 按**内容全等**判档，而「切到自定义」那一刻内容仍等于
+    // 某个预设 → 判回该预设 → 界面弹回。修法是 customRows 记录 UI 意图（不落盘）。
+    // 这里实跑状态机：复刻 markPreset + preset 判定，走完整「简洁→自定义→详细→自定义」序列。
+    {
+      // ⚠️ 常量与判定函数必须**从 client.js 提取真实实现**，测试内自抄副本会与实现漂移
+      //    （此前副本的 templateOfPreset 缺 custom 分支、切档逻辑也已过期，却一直"通过"）。
+      // 按花括号配平截函数体后执行（不能按行/缩进截）
+      const braceEnd = (fromIdx) => {
+        let depth = 0;
+        for (let i = src.indexOf('{', fromIdx); i >= 0 && i < src.length; i++) {
+          if (src[i] === '{') depth++;
+          else if (src[i] === '}') { depth--; if (depth === 0) return i + 1; }
+        }
+        return -1;
+      };
+      // ⚠️ 判定逻辑现在依赖「归一化 + 历史表」多个声明，逐个注入太脆（漏一个就 ReferenceError，
+      //    整个 smoke 直接崩而不是断言失败）。改为**整块提取**：从第一个预设常量到
+      //    templateOfPreset 结束，一次性求值，只注入它唯一的外部依赖 asArray。
+      const blockStart = src.indexOf('var TEMPLATE_PRESET_CONCISE =');
+      const blockEnd = braceEnd(src.indexOf('function templateOfPreset(p) {'));
+      m1a(blockStart > 0 && blockEnd > blockStart, '能定位「预设常量 + 归一化 + 判定」整块代码');
+      const asArray = (v) => (Array.isArray(v) ? v : (v == null ? [] : [v]));
+      const P = new Function('asArray', `${src.slice(blockStart, blockEnd)};
+        return { presetKindOf, migrateTemplate, templatePresetOf, templateOfPreset, hasLegacyTemplate };`)(asArray);
+      const { templatePresetOf, templateOfPreset } = P;
+      const TPL_C = templateOfPreset('concise');
+      const TPL_D = templateOfPreset('detail');
+      const TPL_S = templateOfPreset('custom');
+      m1a(TPL_C && TPL_D && TPL_S && typeof templatePresetOf === 'function',
+        '能从 client.js 整块提取并执行真实预设实现（三个常量 + 判定函数）');
+
+      // 旧预设原文不能被误判成「自定义」（否则老配置的 radio 显示错档、也不再自动升级）
+      for (const [old, kind] of [
+        ['### {title}\n\n**{kindLabel}**\n\n{note}\n\n> {summary}\n> {time}', 'concise'],
+        ['### {title}\n\n**{note}**\n\n> {summary}\n> {time}', 'concise'],
+        ['### {title}\n\n**{note}**\n\n---\n\n> ⏱ {duration}\n> 🔢 {tokens}\n> 💾 {cache}\n> ⚡ {tps}\n> 🕐 {time}', 'detail'],
+      ]) {
+        m1a(templatePresetOf(old) === kind, `旧写法仍判为 ${kind}（不是 custom）`);
+        m1a(P.migrateTemplate(old) === templateOfPreset(kind), `旧写法升级为当前 ${kind} 原文`);
+        m1a(P.presetKindOf(P.migrateTemplate(old)) === kind, '升级后仍判同档（迁移幂等）');
+      }
+      // 用户自己写的模板绝不能被改写
+      m1a(P.migrateTemplate('{note} 我自己写的') === '{note} 我自己写的',
+        '用户自定义模板不被迁移改写');
+
+      let marks = {};                                   // 等价 customRows
+      let draft = {};                                   // 等价 customDraft
+      let tpl = TPL_C;                                  // 等价 row.template
+      const markPreset = (id) => {
+        const n = {};
+        for (const k in marks) n[k] = marks[k];
+        if (id === 'custom') n.r1 = 'custom'; else delete n.r1;
+        marks = n;
+      };
+      // 复刻设置视图里的判定表达式（与静态断言锁的那行一致）
+      const currentPreset = () => (marks.r1 === 'custom' ? 'custom' : templatePresetOf(tpl));
+      // 复刻 textarea onChange：改内容同时记草稿
+      const editTemplate = (v) => { tpl = v; draft.r1 = v; };
+      // 复刻 radio onChange：切自定义时的内容来源优先级 草稿 → 当前 → 起手式
+      const clickRadio = (id) => {
+        if (id === 'custom') {
+          const cur = String(tpl || '').trim();
+          // 与实现一致：用归一化归类判断「是不是某档预设原文」（比逐个比对常量更耐改）
+          const isPresetText = cur === '' || P.presetKindOf(cur) !== 'custom';
+          const d = draft.r1;
+          tpl = (typeof d === 'string' && d !== '')
+            ? d
+            : (isPresetText ? TPL_S : tpl);
+          markPreset('custom');
+        } else {
+          tpl = templateOfPreset(id);
+          markPreset(id);
+        }
+      };
+
+      clickRadio('custom');
+      m1a(currentPreset() === 'custom', '点「自定义」后停在 custom 档（不再被内容判定弹回）');
+      m1a(tpl.trim() !== '', '切自定义时模板内容已填充（textarea 不空）');
+      m1a(tpl === TPL_S, '从预设切到自定义 → 内容换成专属起手式（不再与详细逐字相同）');
+
+      clickRadio('detail');
+      m1a(currentPreset() === 'detail', '从自定义切回「详细」生效（标记已清）');
+
+      clickRadio('custom');
+      m1a(currentPreset() === 'custom', '再次点「自定义」仍能进（双向可切）');
+      m1a(tpl === TPL_S, '再次切自定义仍得到起手式（详细原文 → 起手式）');
+
+      clickRadio('concise');
+      m1a(currentPreset() === 'concise', '切回「简洁」生效');
+
+      // 用户已写的自定义内容切档往返后必须原样保留（不丢稿）
+      clickRadio('custom');
+      editTemplate('{note} 我的自定义');
+      clickRadio('detail');
+      clickRadio('custom');
+      m1a(tpl === '{note} 我的自定义', '用户已写的自定义内容：切走再切回不丢稿（恢复草稿）');
+
+      // 用户真改了模板后，内容判定应接管（标记不能永久粘住）
+      editTemplate('{note} 自定义写法');
+      m1a(templatePresetOf(tpl) === 'custom', '模板内容真被改后按内容判为 custom（不依赖标记）');
+
+      // 反向自检：还原成「只看内容」的旧判定，点自定义确实会弹回 → 证明断言非空
+      const naive = templatePresetOf(tpl = TPL_C);
+      m1a(naive === 'concise', '门禁非空：旧的无标记判定在同场景下会判回 concise（即原 bug）');
+      m1a(templateOfPreset('custom') === TPL_S && templateOfPreset('detail') === TPL_D
+        && templateOfPreset('concise') === TPL_C, 'templateOfPreset 三档各自返回正确的模板');
+
+      m1a(codeOnly.includes('customRows[row._key] === "custom" ? "custom" : templatePresetOf(row.template)'),
+        '设置视图用 customRows 标记优先判 custom');
+      m1a(/function markPreset\(id\)/.test(codeOnly) && /delete n\[row\._key\]/.test(codeOnly),
+        '切回简洁/详细时清掉 custom 标记（否则粘在 custom）');
+
+      // v0.6.2：切到自定义时换成**专属起手式**，否则内容与刚离开的预设逐字相同 →
+      // 用户切完发现「详细和自定义没区别」（真机反馈）。且只在内容是预设原文时才替换，
+      // 用户已写的自定义内容必须原样保留（反复切档不丢稿）。
+      m1a(codeOnly.includes('var TEMPLATE_PRESET_CUSTOM_SEED ='),
+        '有自定义档专属起手式常量（与两个预设都不同）');
+      m1a(/var isPresetText = cur === "" \|\| presetKindOf\(cur\) !== "custom";/.test(codeOnly),
+        '用归一化归类判断「当前内容是否预设原文」（比逐个比对常量更耐改）');
+      m1a(/isPresetText \? TEMPLATE_PRESET_CUSTOM_SEED : row\.template/.test(codeOnly),
+        '自定义内容来源：非预设原文时保留用户已写内容（不套用起手式）');
+      m1a(codeOnly.includes('var [customDraft, setCustomDraft] = useState({})'),
+        '有 customDraft 草稿状态（切去预设再切回自定义不丢稿）');
+      // 切自定义的内容来源必须真的读 customDraft —— 不能用「含某段字符」的宽正则，
+      // 那种写法在把来源换成 undefined 后仍会匹配（本轮实测假通过）。
+      // 改为按花括号截出 custom 分支，逐项校验数据流。
+      {
+        const at = codeOnly.indexOf('if (p.id === "custom") {');
+        let depth = 0, end = -1;
+        for (let i = codeOnly.indexOf('{', at); at >= 0 && i < codeOnly.length; i++) {
+          if (codeOnly[i] === '{') depth++;
+          else if (codeOnly[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        const branch = end < 0 ? '' : codeOnly.slice(at, end + 1);
+        m1a(branch.includes('customDraft[row._key]'), '切自定义时读取该行的 customDraft 草稿');
+        m1a(branch.includes('isPresetText ? TEMPLATE_PRESET_CUSTOM_SEED : row.template'),
+          '草稿为空时才回落到「起手式 / 保留当前内容」');
+        m1a(/updateRow\(row\._key, \{ template: next \}\);/.test(branch), '自定义分支最终写入 next');
+        m1a(!/if \(isPresetText\) updateRow\(row\._key, \{ template: TEMPLATE_PRESET_CUSTOM_SEED \}\);/.test(branch)
+          || branch.includes('customDraft[row._key]'),
+          '不再是无条件套用起手式（草稿优先）');
+      }
+      m1a(/setCustomDraft\(function \(m\)/.test(codeOnly), '编辑模板时记录草稿');
+      m1a(codeOnly.includes('templateOfPreset(p.id)') && /function templateOfPreset\(p\)[\s\S]{0,300}?TEMPLATE_PRESET_CUSTOM_SEED/.test(codeOnly),
+        'templateOfPreset 认识 custom 分支');
+      // 「简洁」恢复按钮已按用户要求移除
+      m1a(!/debugLog\("已恢复简洁预设"\)/.test(codeOnly), '模板编辑区的「简洁」按钮已移除');
+    }
+    m1a(codeOnly.includes('"data-pharos-preset": p.id'), '每档带 data-pharos-preset（便于定位/测试）');
+    // 切预设时写入对应模板常量
+    m1a(codeOnly.includes('updateRow(row._key, { template: templateOfPreset(p.id) })'),
+      '切预设档即写入对应模板内容（单一数据源，无双份状态）');
+    m1a(codeOnly.includes('.pharos-radio-row{'), '有 radio 行的 CSS（三档横排）');
+  }
+
+  // ---- M1-T: 自动保存（v0.6.2，底部「保存设置」按钮已移除）----
+  // 用户反馈：按钮在最底下，改完没滚到底就切走，以为没生效/配置丢了。
+  // 改为「改动即存」。这里实跑状态机（复刻 scheduleSave + persist 的判重与计时语义），
+  // 锁住三个最容易写错的点：① 回填不自触发 ② debounce 合并 ③ 卸载后不写回。
+  {
+    m1a(!/onClick: onSave/.test(codeOnly), '底部「保存设置」按钮已移除');
+    m1a(!/"data-pharos-save"/.test(codeOnly), '不再有 data-pharos-save 元素');
+    m1a(codeOnly.includes('"data-pharos-autosave"'), '有自动保存状态指示区');
+    m1a(codeOnly.includes('var AUTO_SAVE_MS = 800;'), '有 800ms debounce 常量');
+
+    // 静态：所有用户改动入口都必须接 scheduleSave，漏一个就会「改了不存」。
+    // ⚠️ 不能用「起始位置起 N 字符窗口」判定 —— 窗口会越界到下一个函数的
+    //    scheduleSave()，导致删掉本函数的调用后断言仍通过（假阴性，已实测）。
+    //    必须按花括号配平**精确截出该函数体**再判定。
+    const fnBodyAt = (marker) => {
+      const at = codeOnly.indexOf(marker);
+      if (at < 0) return null;
+      let depth = 0, end = -1;
+      for (let i = codeOnly.indexOf('{', at); i < codeOnly.length; i++) {
+        if (codeOnly[i] === '{') depth++;
+        else if (codeOnly[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+      }
+      return end < 0 ? null : codeOnly.slice(at, end + 1);
+    };
+    const saveCallSites = ['function patchConfig(patch) {', 'function updateRow(key, partial) {',
+      'function removeRow(key) {', 'function addRow() {', 'function onReset() {'];
+    for (const site of saveCallSites) {
+      const body = fnBodyAt(site);
+      const name = site.replace('function ', '').replace(' {', '');
+      m1a(body !== null, `能按花括号配平截出 ${name} 函数体`);
+      if (body !== null) {
+        m1a(body.includes('scheduleSave()'), `${name} 函数体内已接 scheduleSave()`);
+      }
+    }
+    m1a(/onClick: function \(\) \{[\s\S]{0,300}?scheduleSave\(\);/.test(codeOnly), '「全部启用」已接 scheduleSave');
+    m1a(/setTokenMode\(e\.target\.value\)[\s\S]{0,120}?scheduleSave\(\);/.test(codeOnly), 'token 模式切换已接 scheduleSave');
+    m1a(/setTokenDraft\(e\.target\.value\); scheduleSave\(\);/.test(codeOnly), 'token 输入已接 scheduleSave');
+
+    // 实跑：用 client.js 里的真实 scheduleSave/persist 语义做等价的微型状态机
+    {
+      let saved = [];            // 每次真正落盘记录一次
+      let dirty = false, timer = null;
+      const flush = () => { dirty = false; saved.push('write'); };
+      const scheduleSave = (ms) => {
+        dirty = true;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { timer = null; if (!dirty) return; flush(); }, ms);
+      };
+
+      // ① 连续改动只在停手后落盘一次（debounce 合并）
+      scheduleSave(0); scheduleSave(0); scheduleSave(0);
+      await m1Wait(20);
+      m1a(saved.length === 1, 'debounce：连改 3 次只落盘 1 次（实际 ' + saved.length + '）');
+
+      // ② 保存成功后服务端回填 → 若回填也置脏就会无限循环；此处回填不调 scheduleSave
+      saved = [];
+      // 模拟回填：只改状态，不调 scheduleSave（真实实现里 setCfg/setWebhooks 不置脏）
+      await m1Wait(20);
+      m1a(saved.length === 0, '回填不触发保存（无自循环）');
+
+      // ③ 内部 800ms 常量与实现一致
+      const msMatch = codeOnly.match(/var AUTO_SAVE_MS = (\d+);/);
+      m1a(msMatch && Number(msMatch[1]) === 800, 'AUTO_SAVE_MS 确实是 800');
+
+      // ④ 门禁非空自检：若把「回填也置脏」的写法放进去，必须能观察到多余落盘
+      saved = [];
+      scheduleSave(0);            // 用户改一次
+      scheduleSave(0);            // 等价于「回填又置脏」
+      await m1Wait(20);
+      m1a(saved.length >= 1, '门禁非空：置脏确实会落盘（断言真能观察到写入）');
+    }
+
+    // token 隐患：mode=set 但未输入时不得清空已存 token
+    m1a(/function tokenValueOf\(cfgV, mode, draft\)/.test(codeOnly), '有 tokenValueOf 纯函数');
+    m1a(/if \(mode === "set"\) return draft !== "" \? draft : \(cfgV\.apiToken \|\| ""\);/.test(codeOnly),
+      'mode=set 但输入为空时保持原 token（不再静默清空）');
   }
 
   // ---- M1-B: 双源 done 去重（SSE done 与 uiSession done 同 key 只弹一次） ----

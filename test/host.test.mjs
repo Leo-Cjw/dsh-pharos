@@ -996,6 +996,205 @@ if (!stats) {
     '不同 seq 的 agent-start dedupeKey 不相同');
 }
 
+// ---- 22b. v0.6.1 白盒：{summary}/{kindLabel} + note 自动裁剪（webhook 排版）----
+{
+  const stats = { durationMs: 24000, tokens: 10505, cacheHitRate: 0.99, tps: 7.9 };
+  const doneNote = frames.noteFor('done', { sessionTitle: '你好', ...stats });
+  const done = { kind: 'done', sessionTitle: '你好', note: doneNote, ts: 1757245000000, ...stats };
+
+  // {summary}：只含存在的项；无值 → 空串（供模板整行隐藏，不留残渣）
+  assert(webhook.renderTemplate('{summary}', done) === '24s · 10505 tokens · 缓存命中 99% · 7.9 tok/s',
+    `{summary} 汇总四项统计（实得 ${webhook.renderTemplate('{summary}', done)}）`);
+  assert(webhook.renderTemplate('{summary}', { kind: 'error', ts: 1 }) === '',
+    '{summary} 无统计时为空串（可整行隐藏）');
+  // {kindLabel}：kind 的中文；未知 kind 原样输出
+  assert(webhook.renderTemplate('{kindLabel}', done) === '完成', '{kindLabel} 输出中文');
+  assert(webhook.renderTemplate('{kindLabel}', { kind: 'workflow', ts: 1 }) === '工作流进展', '{kindLabel} workflow → 工作流进展');
+  assert(webhook.renderTemplate('{kindLabel}', { kind: 'zzz', ts: 1 }) === 'zzz', '{kindLabel} 未知 kind 原样输出（不静默丢）');
+
+  // note 自动裁剪：模板含 {title} → 去掉 note 里的「会话名」；含 {summary} → 去掉统计括号
+  const TPL = '### {title}\n\n**{kindLabel}**\n\n{note}\n\n> {summary}\n> {time}';
+  const out = webhook.renderTemplate(TPL, done);
+  assert(!out.includes('「你好」') || (out.match(/你好/g) ?? []).length === 1,
+    '含 {title} 时 note 内的会话名被裁剪（不重复）');
+  assert(!/任务完成：/.test(out), '裁剪后不留悬空冒号（「任务完成：」）');
+  assert((out.match(/10505/g) ?? []).length === 1, '统计只出现一次（note 与 {summary} 不重复）');
+  // 无统计的帧：{summary} 为空 → 该引用行必须整行消失（不留裸 "> "）
+  const bare = { kind: 'error', sessionTitle: 'S', note: '出错 Conn error.', ts: 1 };
+  const bareOut = webhook.renderTemplate(TPL, bare);
+  assert(!bareOut.includes('\n> \n') && !/^\s*>\s*$/m.test(bareOut),
+    '无统计时不留空引用行「> 」');
+  assert(!bareOut.split('\n').some((l) => /^\s*>\s*$/.test(l)),
+    '逐行检查：没有任何行只剩「> 」');
+  assert(bareOut.includes('> 1970-') && bareOut.includes('{time}') === false,
+    '{summary} 空时引用块仍保留 {time} 那行（有内容的引用不被误删）');
+
+  // 裁剪规则只看「模板有没有排对应信息」，与 token 新旧无关：
+  //   · 含 {title} → note 去会话名（首行已列）
+  //   · 含 {summary}/{duration}/{tokens}/{cache}/{tps} → note 去统计括号
+  // 故旧默认模板（`{title} · {kind}\n{note}\n时间：{time}`）含 {title}，
+  // 会话名会被裁掉 —— 这是**有意的去重**，统计则必须保留（模板没排统计）。
+  const legacy = webhook.renderTemplate('{title} · {kind}\n{note}\n时间：{time}', done);
+  assert(!legacy.includes('「你好」'), '旧模板含 {title} → note 的会话名同样被裁（去重一致）');
+  assert(legacy.includes('10505'), '旧模板未排统计 → note 保留统计括号（向后兼容）');
+  // 不含 {title} 的模板：会话名保留（旧行为）
+  assert(webhook.renderTemplate('{note}', done) === doneNote,
+    '裸 {note} 与帧 note 完全一致（无 {title} → 不裁会话名）');
+  assert(webhook.renderTemplate('{kind}\n{note}', done).includes('「你好」'),
+    '模板无 {title} 时 note 保留会话名（向后兼容）');
+}
+
+// ---- 22c. v0.6.2 白盒：模板预设（简洁 / 详细 / 自定义起手式）+ 空壳行清理 ----
+{
+  const stats = { durationMs: 240000, tokens: 10505, cacheHitRate: 0.99, tps: 7.9 };
+  const doneNote = frames.noteFor('done', { sessionTitle: '你好', ...stats });
+  // sessionId 必须给：真实帧都带（如 session-e3a1c519-…），不给会让 {sessionId} 渲染成空，
+  // 起手式里那条「含 sessionId」的断言就失去意义。
+  const done = { kind: 'done', sessionId: 'session-abc123', sessionTitle: '你好', note: doneNote, ts: 1757245000000, ...stats };
+  const bare = { kind: 'error', sessionId: 'session-xyz789', sessionTitle: '上传插件', note: '出错 Connection error.', ts: 1 };
+
+  // ⚠️ 预设必须**从 settings-view.js 提取真实常量**，不能在测试里另抄一份：
+  //    抄本会与实现漂移——改了三档模板而测试仍全绿（本轮已实测踩到）。
+  const svSrc = fs.readFileSync(new URL('../lib/settings-view.js', import.meta.url), 'utf8');
+  const presetOf = (name) => {
+    const m = svSrc.match(new RegExp(`var ${name} = ("[^"]*");`));
+    return m ? JSON.parse(m[1]) : null;
+  };
+  const CONCISE = presetOf('TEMPLATE_PRESET_CONCISE');
+  const DETAIL = presetOf('TEMPLATE_PRESET_DETAIL');
+  const CUSTOM_SEED = presetOf('TEMPLATE_PRESET_CUSTOM_SEED');
+  assert(CONCISE && DETAIL && CUSTOM_SEED, '三个预设常量都能从 settings-view.js 提取到真实值');
+
+  // 钉钉换行铁律（官方 FAQ 原文）：「换行格式： \n 重要 \n前后两个空格」——
+  // 单 \n 会被折叠成空格，**行尾必须有两个空格**才是硬换行。
+  // 真机三轮实测：裸行不行、`> ` 引用块逐行也不行（看着像两行其实是自动换行）。
+  // renderTemplate 会自动补齐硬换行，故这里对**渲染结果**做断言。
+  const missingHardBreak = (out) => {
+    const lines = out.split('\n');
+    let n = 0;
+    for (let i = 0; i + 1 < lines.length; i++) {
+      if (lines[i].trim() !== '' && lines[i + 1].trim() !== '' && !/ {2}$/.test(lines[i])) n++;
+    }
+    return n;
+  };
+  for (const [name, tpl] of [['简洁', CONCISE], ['详细', DETAIL], ['自定义起手式', CUSTOM_SEED]]) {
+    const out = webhook.renderTemplate(tpl, done);
+    assert(missingHardBreak(out) === 0,
+      `${name}：渲染结果里每个相邻行都有硬换行（行尾两空格），不会被钉钉折叠`);
+  }
+  // 反向自检：把硬换行去掉，必须被判为缺失 —— 证明上面那条断言真能抓
+  assert(missingHardBreak(webhook.renderTemplate(CONCISE, done).split('\n')
+    .map((l) => l.replace(/ +$/, '')).join('\n')) > 0,
+    '门禁非空：去掉行尾两空格后必须被判为缺少硬换行');
+  // 后向兼容：用户配置里存的**旧模板**也必须被渲染层修好（否则得先打开设置页才生效）
+  for (const [desc, oldTpl] of [
+    ['裸行详细', '### {title}\n\n**{note}**\n\n---\n\n⏱ {duration}\n🔢 {tokens}\n💾 {cache}\n⚡ {tps}\n🕐 {time}'],
+    ['引用块详细', '### {title}\n\n**{note}**\n\n---\n\n> ⏱ {duration}\n> 🔢 {tokens}\n> 💾 {cache}\n> ⚡ {tps}\n> 🕐 {time}'],
+  ]) {
+    assert(missingHardBreak(webhook.renderTemplate(oldTpl, done)) === 0,
+      `后向兼容：旧模板（${desc}）也被补上硬换行（无需先打开设置页升级）`);
+  }
+
+  // 简洁预设：标题 + note 结论 + 统计摘要 + 时间
+  // v0.6.2 修正：**不含 {kindLabel}** —— note 已是「任务完成」这类结论，
+  // 再叠一行「完成」在钉钉里显示成两行重复（真机截图确认）。
+  const c1 = webhook.renderTemplate(CONCISE, done);
+  assert(c1.includes('### 你好') && c1.includes('**任务完成**'), '简洁预设：标题 + note 结论行');
+  assert(!c1.includes('**完成**'), '简洁预设：不排 {kindLabel}（否则与 note 重复成两行「完成/任务完成」）');
+  assert(/4m · 10505 tokens · 缓存命中 99% · 7\.9 tok\/s {2}\n/.test(c1),
+    '简洁预设：统计摘要独立成行（带硬换行）');
+  assert(!c1.includes('「你好」') && (c1.match(/10505/g) ?? []).length === 1, '简洁预设：无重复（会话名/统计各一次）');
+  // 回归：直接对排了 kindLabel 的旧写法，确认它确实会产生「完成 + 任务完成」两处
+  const CONCISE_OLD = '### {title}\n\n**{kindLabel}**\n\n{note}\n\n{summary}\n{time}';
+  const cOld = webhook.renderTemplate(CONCISE_OLD, done);
+  assert(cOld.includes('**完成**') && cOld.includes('任务完成'),
+    '回归：旧简洁写法确实渲染出两处「完成」（故 v0.6.2 移除 kindLabel）');
+
+  // 详细预设：统计逐项成行 + 分隔线；note 不与 kindLabel 重复
+  const d1 = webhook.renderTemplate(DETAIL, done);
+  assert(d1.includes('**任务完成**'), '详细预设：note 加粗为结论行（不带 kindLabel，避免重复）');
+  assert(/^⏱ 4m {2}$/m.test(d1) && /^🔢 10505 {2}$/m.test(d1), '详细预设：耗时/tokens 各自独立成行');
+  assert(/^💾 99% {2}$/m.test(d1) && /^⚡ 7\.9 tok\/s {2}$/m.test(d1), '详细预设：缓存/速度各自独立成行');
+  assert(d1.includes('\n---\n'), '详细预设：分隔线保留（markdown 有效内容）');
+
+  // 无统计时：空壳行（只剩图标的行）被清，但分隔线与分段空行保留
+  const d2 = webhook.renderTemplate(DETAIL, bare);
+  assert(!d2.split('\n').some((l) => /^\s*[⏱🔢💾⚡]\s*$/u.test(l)),
+    '无统计：只剩图标的空壳行被清理');
+  assert(d2.includes('\n---\n'), '无统计：分隔线仍在');
+  assert(d2.includes('\n\n'), '无统计：分段空行保留（不整行 trim）');
+  assert(!/\n{3,}/.test(d2), '无统计：连续空行被折叠成单个（载荷规范化）');
+  assert(d2.includes('🕐 1970-'), '无统计：{time} 那行保留（有内容的行不被误删）');
+
+  // 自定义起手式：变量比两个预设都多，且与详细**结构不同**
+  const s1 = webhook.renderTemplate(CUSTOM_SEED, done);
+  assert(s1.includes('类型 done · 完成'), '自定义起手式：含 {kind} · {kindLabel}');
+  assert(s1.includes('会话 你好（session-abc123）'), '自定义起手式：含 {sessionTitle} + {sessionId}');
+  assert(s1 !== d1 && s1 !== webhook.renderTemplate(CONCISE, done),
+    '自定义起手式渲染结果与两个预设都不同（否则用户切过去看不出区别）');
+
+  // 简洁预设无统计：{summary} 整段消失且不留连续空行
+  const c2 = webhook.renderTemplate(CONCISE, bare);
+  assert(c2.includes('1970-'), '简洁预设无统计：{time} 段保留');
+  assert(!/\n{3,}/.test(c2), '简洁预设无统计：无连续空行残留');
+
+  // ---- 旧预设原文的识别与自动升级（跑**真实实现**，不抄副本）----
+  // 为什么要迁移：模板是插件维护的。不迁移则老配置既被判成「自定义」（radio 显示错档），
+  // 又继续按旧的折叠写法推送 —— 用户会以为根本没修好。
+  const blockStart = svSrc.indexOf('var TEMPLATE_PRESET_CONCISE =');
+  const toFn = svSrc.indexOf('function templateOfPreset(p) {');
+  let d0 = 0, blockEnd = -1;
+  for (let i = svSrc.indexOf('{', toFn); i >= 0 && i < svSrc.length; i++) {
+    if (svSrc[i] === '{') d0++;
+    else if (svSrc[i] === '}') { d0--; if (d0 === 0) { blockEnd = i + 1; break; } }
+  }
+  assert(blockStart > 0 && blockEnd > blockStart, '能定位「预设常量 + 归一化 + 判定」代码块');
+  const P = new Function('asArray', `${svSrc.slice(blockStart, blockEnd)};
+    return { presetKindOf, migrateTemplate, templatePresetOf, templateOfPreset, normalizeTemplate, hasLegacyTemplate };`)
+    ((v) => (Array.isArray(v) ? v : (v == null ? [] : [v])));
+
+  // 归一化归类：只有换行/引用前缀写法变过的历史版本，无需逐条列举就能认出来
+  const historical = [
+    ['### {title}\n\n**{kindLabel}**\n\n{note}\n\n> {summary}\n> {time}', 'concise', 'v0.6.2 初版简洁（带 kindLabel）'],
+    ['### {title}\n\n**{note}**\n\n> {summary}\n> {time}', 'concise', '引用块版简洁'],
+    ['### {title}\n\n**{note}**\n\n{summary}\n\n{time}', 'concise', '空行分隔版简洁'],
+    ['### {title}\n\n**{note}**\n\n---\n\n> ⏱ {duration}\n> 🔢 {tokens}\n> 💾 {cache}\n> ⚡ {tps}\n> 🕐 {time}', 'detail', '引用块版详细'],
+    ['### {title}\n\n**{note}**\n\n---\n\n⏱ {duration}\n\n🔢 {tokens}\n\n💾 {cache}\n\n⚡ {tps}\n\n🕐 {time}', 'detail', '空行分隔版详细'],
+  ];
+  for (const [old, kind, desc] of historical) {
+    assert(P.presetKindOf(old) === kind, `${desc} 被归到 ${kind}（不误判成 custom）`);
+    const up = P.migrateTemplate(old);
+    assert(up === P.templateOfPreset(kind), `${desc} 被升级为当前 ${kind} 原文`);
+    assert(P.presetKindOf(up) === kind, `${desc} 升级后仍判同档（幂等，不反复回写）`);
+  }
+  // 内容本身变过的历史起手式：归一化认不出，靠显式表兜住
+  for (const oldSeed of [
+    '### {title}\n\n{note}\n\n会话 {sessionTitle}（{sessionId}）\n类型 {kind} / {kindLabel}\n耗时 {duration} · {tokens} tokens · 缓存 {cache} · {tps}\n时间 {time}',
+    '### {title}\n\n**{note}**\n\n> 会话 {sessionTitle}\n> 会话 ID {sessionId}\n> 类型 {kind} · {kindLabel}\n> 耗时 {duration} · {tokens} tokens\n> 缓存 {cache} · {tps}\n> 时间 {time}',
+  ]) {
+    assert(P.presetKindOf(oldSeed) === 'seed', '历史自定义起手式被识别为 seed（非 custom）');
+    assert(P.migrateTemplate(oldSeed) === CUSTOM_SEED, '历史起手式升级为当前起手式');
+  }
+  // 用户自己写的内容**绝不**能被改写
+  for (const mine of ['{note}', '### {title}\n我自己写的', '随便一段文字', '']) {
+    assert(P.migrateTemplate(mine) === mine, `用户自定义模板原样保留：${JSON.stringify(mine)}`);
+  }
+  // hasLegacyTemplate：只有旧预设才触发回写
+  assert(P.hasLegacyTemplate([{ template: '### {title}\n\n**{note}**\n\n> {summary}\n> {time}' }]) === true,
+    '旧预设原文 → 判定需要回写');
+  assert(P.hasLegacyTemplate([{ template: CUSTOM_SEED }]) === false, '当前起手式 → 无需回写');
+  assert(P.hasLegacyTemplate([{ template: '我自己写的' }]) === false, '用户自定义 → 无需回写（不会被动改）');
+  assert(P.hasLegacyTemplate([{ template: '' }]) === false, '空模板 → 无需回写');
+
+  assert(/template: migrateTemplate\(/.test(svSrc), 'draftRows/mergeConfig 里对 template 做迁移');
+  assert(/if \(hasLegacyTemplate\(merged\.webhooks\)\)[\s\S]{0,200}?scheduleSave\(\);/.test(svSrc),
+    '初载检测到旧预设 → 回写一次（否则 host 落盘的仍是旧模板）');
+  // ⚠️ 必须**行首锚定**：新写法 `template: migrateTemplate((w && …))` 里仍含旧片段，
+  //    不加锚点的负向断言会永远匹配（写成 !re.test(...) 就成了假通过）。
+  assert(!/[\n\r]\s*template: \(w && typeof w\.template/.test(svSrc),
+    'template: 后面必须是 migrateTemplate（不再原样透传旧 template）');
+}
+
 // ---- 23. v0.6.1 白盒：{time} 必须是**本地**时间（曾用 toISOString → UTC，差一个时区）----
 {
   // 用户实测：钉钉收到「时间：2026-10-07T13:01:33.217Z」，实际本地时间是 21:01（东八区差 8h）
@@ -1145,6 +1344,30 @@ if (!stats) {
   assert(got.workflowEvents === true, 'workflowEvents 可持久化');
   assert(got.workflowLog === true, 'workflowLog 可持久化');
   disposer();
+}
+
+// ---- 24. 测试自身门禁：禁止「静默跳过」把破坏伪装成全绿（v0.6.2）----
+// 反向验证时踩过：破坏 settings-view 的条件守卫后，因删得不彻底留下悬空 ': null,'
+// → client.js 语法错误 → 测试在 vm 编译阶段就抛 → 只看到一个不指向真因的 SyntaxError。
+// 加上「skip 分支必须硬失败」后，任何加载失败都会显式报出成因，不再靠退出码猜。
+{
+  const smokeSrc = fs.readFileSync(new URL('./smoke.mjs', import.meta.url), 'utf8');
+  // 一律用「切片 + includes」而非 {0,N} 字符窗口：窗口宽度会随提示文案改动而失效，
+  // 静默变成假失败（本段开发中已实测 700 不够、需 727）。
+  const compileGuard = smokeSrc.slice(smokeSrc.indexOf('try {'), smokeSrc.indexOf('const bundle = captured.factory'));
+  assert(compileGuard.includes('instanceof SyntaxError'),
+    'smoke 捕获 client.js 的 SyntaxError 并给出成因提示（而非裸抛栈）');
+  assert(compileGuard.includes('FAIL: lib/client.js 解析失败'),
+    'SyntaxError 分支打印「client.js 解析失败」而不是让测试静默中断');
+  // 不用 {0,N} 窗口距离匹配 —— 提示文案一改就会假失败（本段已踩过一次 700 vs 727）。
+  // 改为「取 m1Ready 分支到 else 之间的切片」，距离由代码结构而非字数决定。
+  // 注意 indexOf 必须带起点参数：文件前部还有别的 '} else {'，不带会切错区间。
+  const readyIdx = smokeSrc.indexOf('if (!m1Ready) {');
+  const skipBranch = smokeSrc.slice(readyIdx, smokeSrc.indexOf('} else {', readyIdx));
+  assert(skipBranch.includes('m1Failed++') && skipBranch.includes('hasImpl'),
+    'm1Ready 为假且源码已含实现时硬失败（M1 组不再静默 skip）');
+  assert(/hasImpl \? '含（→ 是加载失败）'/.test(smokeSrc),
+    '门禁区分「加载失败」与「尚未实现」两种豁免，避免误伤早期版本');
 }
 
 console.log(failed === 0
