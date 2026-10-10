@@ -94,7 +94,10 @@ const DEFAULT_CONFIG = {
   - v0.3 引擎（uiSession.sessionStatus + sessions）原样保留，产出 needs-you（本会话级）与 done（本地计时补丁）。
   - SSE 帧进同一策略层：去重（帧级 2s 窗口 + Web Locks 跨标签）、quiet hours、子代理过滤（skipSubagents 且 agentType==='subagent' → 丢弃）、渠道路由。
   - 渠道：system-notification / chime（done 双音上行、attention 三音下行、error 重低音、interrupted/limit 中音警示）/ title-marker（🔔 需要你 / ⏳ 闪烁）/ dom-toast（权限 denied/不可用时兜底）。
-  - 点击通知：`window.focus()` + `sessions.binding(id)?.session.open()`（best-effort，v0.3 行为保留）。
+  - 点击通知：`window.focus()` + `openSession(id)`。v0.6.3 主路径 `uiWorkspace.openSession(id)`（真正切视图），`binding(id)?.session.open()` 降为老宿主兜底。
+    - **前置闸门**（对齐官方 `sessionLinkState`，client-ui-schedule/lib/types/client/session-link.js）：`workspaces.state==='error'` / `sessions.phase==='pending'` / `workspaces.phase==='pending'` / `archivedSessionIds` 命中 / **不在 `sessions.ids`**（刻意用 `ids` 而非 `byId`，因 byId 另含本地兜底行）—— 任一命中即不跳。投影不可读（服务缺失）同样不跳：宁可漏跳，不冒险跳进归档。
+    - **服务解析**：`ctx.get(name)` **strict 优先**。cordis 的 `strict` 只过滤提供方 fiber 是否 ACTIVE（`_getImpl`：`if (strict && impl.fiber.state !== 2) return`），**与 inject 声明无关**；non-strict 会连未 ACTIVE 的半初始化实例一起返回。解析阶段**不缓存**，仅在 `openSession` 调用成功后回填 —— 否则半初始化实例被永久缓存会导致导航能力永久退化。
+    - 所有 kind 一律跳（v0.6.3 去掉了原先仅 attention 跳的限制）。
 
 ## 6. 行为规则（去重/节流/静默）
 
@@ -114,7 +117,7 @@ const DEFAULT_CONFIG = {
 - job 事件：`ctx.jobs.events.subscribe({owners:'scope'}, e => …)`；e.type∈settled/removed；job.status∈running/stopping/completed/killed/failed（dsh-tool-jobs）。
 - 设置页槽位：`settings.section`（顶级分区）与 `settings.plugins.tab`（「内置插件」分区内标签页）**两个槽本机都存在**。
   - **原记「`settings.section` 不存在」有误（2026-10-05 复核）**：查错了包 —— 槽位声明方是 `@deepseek-ai/dsh-client-ui-settings-general/lib/client.js:1137-1140`（`"settings.section": { kind: "list", scope: "root" }`），导航投影在同文件 `:1017-1040`（`slots.entries("settings.section")` → `sort(order)`）、渲染在 `:338`（`renderSlot("settings.section", { close }, { only: active })`）。`dsh-client-ui-settings` 只提供底座与配置表单，本身不声明该槽。详见 §10。
-- 跳会话：`sessions.binding(id)?.session.open()` 存在（api-session-controller client.js:1857/3110/3400）；`sessions.open(id)` 不存在。
+- 跳会话：**导航入口是 `uiWorkspace.openSession(id)`**（dsh-client-ui-workspace client.js:821 → `replaceMain(target, signal, "reveal")`：retain mainView + selection.set + layout.selectPanel(null)）。⚠️ `session.open()`（api-session-controller client.js:1857）**不是导航**，只是拉事件流/历史尾页；`binding(id)`（:3407）= `scopes.get(id)?.binding`，而 `scopes` 只在 `retain()` 时 materialize（:3473）→ 未 retain 的后台会话拿不到 binding。`sessions.open(id)` 不存在。UI 主区渲染谁由 `uiSession.current` 按 `retainedBy.mainView > 0` 挑（dsh-client-ui-session client.js:283/:340）。
 - 服务注入：host `ctx.inject(['webServer'], cb)`、`ctx.get(name, false)` 惰性查；client 插件**必须把读取的服务全部声明进 inject**——cordis 上下文代理对未声明服务的直接属性读（`ctx.sessions` / `ctx.uiSession` / `ctx.slots`）抛 `cannot get property X without inject`（0.2.0-rc.2 实测，dsh-notify-me lib/client.js:20-21 同款教训）；本插件声明 `["sessions", "uiSession", "slots"]`，且 apply 永不外抛（避免 cordis 上报 `web boot: … did not activate` 触发 fail-loud 恢复流程重写 profile 补丁）。服务按树序激活可能晚于本条目，apply 用 500ms×60 重试延迟接管（照 dsh-notify-me）。
 
 **需冲刺核实（实现成员开工前 30-60min 内查源码定案）**：

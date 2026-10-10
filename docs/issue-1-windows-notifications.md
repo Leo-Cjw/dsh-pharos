@@ -45,7 +45,7 @@ new Notification(title, { body, tag: `dsh-pharos:${sessionId}:${kind}`, silent: 
 
 通知历史通过只读 WinRT `ToastNotificationManager.History.GetHistory('electron.app.DeepSeek Harness')` 读取。测试没有修改 Windows 通知/安全设置、权限、账户凭据或 webhook 配置。
 
-本机改插件文件后，单独刷新曾因宿主仍请求旧 rev 产生 404，普通重启后恢复。最终只替换本机安装目录的 lib/client.js，原文件备份为 `%TEMP%/pharos-issue1-original-client.js`；这不是发布或升级包。最终源码仍在当前 Git issue 分支，版本号未发布。源码与安装文件 SHA-256 一致：`B04E16881049083CD77F4B733D037AA6831896A05F013EC6AE2D58A01492565E`。普通退出并重新启动后，再次以长 ID 触发，Windows 通知历史确认最终候选条目存在。
+本机改插件文件后，单独刷新曾因宿主仍请求旧 rev 产生 404，普通重启后恢复。上一轮本机验收只替换安装目录的 lib/client.js，原文件备份为 `%TEMP%/pharos-issue1-original-client.js`；这不是发布或升级包。该候选基于 0.6.2，验收时源码与安装文件 SHA-256 一致：`B04E16881049083CD77F4B733D037AA6831896A05F013EC6AE2D58A01492565E`。普通退出并重新启动后，再次以长 ID 触发，Windows 通知历史确认该候选条目存在。这个 hash 是当时的验收证据，不代表后续合并后的源码。
 
 ## 自动化回归与限制
 
@@ -56,6 +56,14 @@ new Notification(title, { body, tag: `dsh-pharos:${sessionId}:${kind}`, silent: 
 另外覆盖 unread 与 SSE 两种先后顺序的去重、完成三档与 visibilityState、异步失败只补一条、不重复声音、关闭后不补弹、构造失败、诊断队列容量。
 
 真实完成和 remote 已在本机验证。其他事件走同一个 deliver 通道且有自动化覆盖，但未逐类制造真实错误、审批、中断和工作流任务。未验证其他 Windows/Electron 版本。shown 表示宿主显示回调，通知历史表示原生条目存在；没有保存系统横幅截图，也不据此声称验证了用户实际看到横幅、点击聚焦或所有免打扰场景。
+
+## 合并 main（2026-10-10）
+
+已将 `origin/main` 的 `e230be1`（v0.6.3 点击通知跳转修复）合入当前 issue 分支。保留去长 tag、显示回调和异步失败处理，同时保留 main 的导航服务获取、会话状态检查、所有通知类型的点击跳转以及 navLog/deliverLog。
+
+测试桩保留 main 的 Web/EventEmitter 双形态；Windows tag 和 Web 异步错误用例明确使用 Web 形态，避免把 Electron 主进程的通知 API 当成渲染进程 API。合并后的 `npm test` 全部通过：浏览器 M1 280 项、host 317 项，以及原有 v0.3 断言。
+
+这次只更新 Git 开发分支，没有重新部署本机 DSH 插件或发布版本；上一节的实机结果属于合并前候选，合并后的点击跳转未另做实机验收。
 
 ## 再次排查
 

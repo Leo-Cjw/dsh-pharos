@@ -59,6 +59,14 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 - **一键测试按钮**：测试页内提示和声音；不验证系统通知。验证 Windows 系统通知请使用真实事件或 `POST /pharos/api/trigger`（`configApi` 缺失时，远程按钮回退该接口）。
 - **Debug 面板**：配置来源 / host 在线状态 / SSE 状态与**帧计数** / 权限 / 绑定状态 / 实时日志。点击刷新可查看 `recentNotifications`：`requested` 仅表示构造成功，`shown` 表示收到宿主显示回调，`error` 表示异步失败，`suppressed` 含静默原因。无回调不算显示成功，`shown` 也不能证明用户看到了横幅。
 
+- **跳转轨迹**（v0.6.3 新增，见 [复盘](docs/postmortem-0.6.3-nav.md)）：「点击通知跳转会话」是**静默失败**的功能——横幅照弹、点击照接收、界面不动时没有任何提示。因此 `debug()`（控制台 `window.__dshPharos.debug()`）除原有字段外还暴露：
+  - `deliverLog` —— 每次通知投递走哪条渠道（`system-notification` / `dom-toast`）、发了什么、是否挂了点击回调
+  - `navLog` —— 每次点击的判定：`outcome`（`navigated` / `gate-blocked` / `fallback-open` …）、`from`（点击来自系统通知还是页内 toast）、`via`（导航路径）、`alreadyCurrent`（点了是否本来就是当前会话）、`detail`（被哪条闸门拦住）
+  - `navService` —— `uiWorkspace` / `workspaces` 可用性与缓存状态、两个投影的 `phase`
+  - `recentFrames[].sessionId` —— 帧归属的第一手证据
+
+  排查「点了没跳」时先看这四个字段，不要凭现象猜。
+
 Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
 > **改动自动保存**（v0.6.2）：设置页不再有底部「保存设置」按钮 —— 按钮在最底下，改完没滚到底就切走会以为没生效。现在**任何改动停止约 0.8 秒后自动落盘**（连续输入合并为一次写入），底部仅显示保存状态。host 离线时写入本地偏好层。
@@ -111,7 +119,10 @@ window.__dshPharos.debug()
 
 ```bash
 # ① 把仓库同步到 profile 的 local-plugins（源码地）
-cp -R <repo>/ ~/.dsh/profiles/desktop/local-plugins/dsh-pharos
+#    ⚠️ 用 rsync --delete，别用 cp -R：cp 只覆盖同名文件，旧布局遗留在根级的
+#    client.js / index.js / settings-view.js 与孤儿 lib/webhook.js 会一直留着。
+rsync -a --delete --exclude .git --exclude node_modules --exclude .DS_Store \
+  <repo>/ ~/.dsh/profiles/desktop/local-plugins/dsh-pharos/
 # ② 登记进 profile manifest（dependencies + bundles；link: 保持指向 local-plugins）
 #    "dependencies": { ..., "dsh-pharos": "link:./local-plugins/dsh-pharos" }
 #    "dsh.profile.bundles": [ ..., "dsh-pharos" ]
@@ -140,8 +151,9 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 
 从 GitHub 克隆本仓库开发（`git clone git@github.com:Leo-Cjw/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
 
-- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 133 项（v0.6.1）：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致）；host 半：`node test/host.test.mjs`（241 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
+- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 **243 项**（v0.6.3）：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致 / **v0.6.3 跳转会话组**——真导航路径、老宿主兜底正反两面、归档/phase/state 闸门、`ids` vs `byId`、半初始化服务实例不被永久缓存、双形态 Notification（`on('click')` 与 `onclick` 各一条）、同一次完成双源去重、`navLog`/`deliverLog` 轨迹）；host 半：`node test/host.test.mjs`（317 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
 - 发布流程：改 `lib/` 与 `package.json` → `node tools/sync-settings-view.mjs`（设置页视图内联进 client.js，`npm test` 前会自动执行）→ 跑测试 → 升版本 → `git push` + 打 tag → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention"|"done"|"error")` 验证
+- **复盘文档**：[postmortem-0.6.3-nav.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/postmortem-0.6.3-nav.md)（「点击通知不跳转会话」六轮排查的方法论：静默失败必须自带可观测性、观测代码要与被测代码同源、mock 保真度决定测试有效性）
 - 架构文档：[functional-architecture.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
 - 架构图：[pharos-architecture.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-architecture.html)（浏览器半 × Host 半双层结构）· [pharos-sequence.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-sequence.html)（通知事件流）——浏览器打开即交互（主题切换/聚焦/导出）
 - 对标仓库代码级分析：[docs/research/](https://github.com/Leo-Cjw/dsh-pharos/tree/main/docs/research)（notify-me / turn-notify / my-notify / session-notify 逐文件报告）

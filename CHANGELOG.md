@@ -13,6 +13,74 @@
 
 验证范围与剩余限制见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。
 
+## [0.6.3] — 2026-10-09
+
+patch 版：修「点击系统通知只把 DSH 拉到前台、不跳到该会话页」。此前该能力从 v0.3 起就从未真正生效。
+
+### ~~根因二：Electron 里 `Notification` 不是 Web API 对象~~（**该结论已被真机数据推翻，勿信**）
+
+> **撤回说明**：本节结论**错误**，保留仅为记录教训。真机 `debug().deliverLog` 显示
+> `hasOnclick: true, hasOn: false` —— 渲染进程的 `Notification` **没有** `on`/`show`，
+> 即**标准 Web Notifications API**，`onclick` 是正确且唯一的写法。
+> 渲染进程配置也印证：`contextIsolation: true` + `nodeIntegration: false` + `sandbox: true`
+> （app.asar `lib/main.js` 的 webPreferences）。错因：我拿**主进程**（Node 侧）的用法
+> `new Notification({…}).once("click").show()` 去推断**渲染进程**，两者是完全不同的类。
+>
+> `on("click")` / `show()` 的能力探测**保留在代码里**（无害，且宿主若换形态仍可用），
+> 但它们**不是**本次修复的原因。真正原因是下节「根因一」。
+
+### 排查过程中确认的一个附带缺陷：同一次完成弹两条通知
+
+真机 `deliverLog` 实测两条 `done` 投递仅相差 ~118ms。原因：`completionUnread` 边沿那条路径
+（`lib/client.js` 的 `tick()`）**直连 `notifyDone()`，绕过 `maybeNotifyDone()` 的
+`minIntervalMs` 节流**，于是与 SSE done 帧各弹一次。已改为统一走 `maybeNotifyDone`，
+双源共用会话级节流 + `lastDoneAt`，同一次完成只剩一条。
+
+### 根因一：导航 API 语义用错
+
+- **点击通知/页内 toast 现在会真正切到对应会话**。
+  - 旧实现调 `sessions.binding(id)?.session.open()`，
+    但 `session.open()` 不是「切换会话」，只是「首次打开该会话的事件流 + 拉历史尾页」
+    （`doOpen()` → `new SessionEventStream(...)`）；而且 `binding(id)` = `scopes.get(id)?.binding`，
+    `scopes` 仅在 `retain()` 时 materialize —— **未 retain 的后台会话返回 `undefined`**。
+    两者叠加，导致点来自非当前会话的通知时必然空转；外面那层 `try {} catch {}` 把症状彻底掩盖了。
+  - **改走 `uiWorkspace.openSession(id)`**（`replaceMain(target, signal, "reveal")`：
+    retain mainView + `selection.set({sessionId})` + `layout.selectPanel(null)`），这才是宿主的
+    正规导航入口，官方插件同款调用见 dsh-client-ui-chat。
+  - 保留 `binding().session.open()` 作为**老宿主兜底**（行为退化为 v0.6.2，不会更差）。
+  - **前置闸门对齐官方 `sessionLinkState`**（`dsh-client-ui-schedule/.../session-link.js`）：
+    `workspaces.state==='error'` / `sessions.phase==='pending'` / `workspaces.phase==='pending'` /
+    `archivedSessionIds` 命中 / **不在 `sessions.ids`** —— 任一命中即不跳。投影不可读（服务缺失）
+    同样不跳：宁可漏跳，也不冒险跳进归档。成员判定刻意用 `ids` 而非 `byId` —— 官方注释写明
+    byId 另含 live Client generation 的本地兜底行（byId ⊋ ids），宿主列表已丢弃的会话在
+    byId 里仍可能有行。workflow 帧的 `sessionId` 是 runId，同样落在这里被拦下。
+- **所有 kind 的系统通知都跳会话**。此前只有「需要你」跳，「回复完成/出错/上限」等点开只聚焦窗口
+  ——与页内 toast（所有 kind 都跳）行为不一致。
+- `uiWorkspace` / `workspaces` **不写进** `dsh.client.inject`（inject 是硬门，宿主缺包会直接 pending
+  并触发 web boot 审计失败，notify-me 1.1.5 即因此哑火），改为点击时惰性解析，且
+  **strict 优先 + 仅调用成功后回填缓存**。
+  - ⚠️ 这里修正了 0.6.3 初版的一处错误推理：cordis `ctx.get` 的 `strict` **与 inject 声明无关**，
+    只过滤提供方 fiber 是否 ACTIVE（`_getImpl`：`if (strict && impl.fiber.state !== 2) return`）。
+    因此 `strict=false` 会把**已注册但尚未 ACTIVE** 的半初始化实例一起端上来；若在解析阶段就把它
+    缓存住，此后每次点击都复用坏实例、抛错被吞 → **永久**退回兜底，正好废掉本次修复。
+    服务在 apply/effect 里 provide、state 置 ACTIVE 在其之后的 `_updateState()`，二者之间存在窗口。
+- **新增跳转判定轨迹 `debug().navLog` / `debug().navService`**。「点了通知没跳」是本功能**唯一无法自证成败**的失败模式 —— 失败即静默，用户看不到任何提示。本次排查中我们先后误判了三次（先怪 API 缺失、再怪自己插入的诊断代码、再怀疑 done 路径被单独限制），根源都是手里没有可观测数据。现在每次点击都会留痕：被哪条闸门拦住（`gate-blocked` + 具体原因：`not-in-sessions-ids` / `workspaces-phase-pending` / `archived` / `workspaces-service-missing` …）、走了哪条路径（`navigated` / `fallback-open` / `nav-threw`），外加 `navService` 里 `uiWorkspace` / `workspaces` 的可用性与两个投影的 phase。设置页 Debug 区与控制台 `window.__dshPharos.debug()` 均可直接读取。
+  - 轨迹含 **`alreadyCurrent`** 标记。**真机结论：完成通知一直是好的** —— 用户在自己的会话里让 agent 干活，跑完触发「完成」通知，点它 → 正确导航到 `session-9b37f68e…` → 而那正是当前会话，界面当然不动；「需要你」「出错」能跳是因为它们来自**另一个**后台会话。此前轨迹里 `navigated` 与「界面无变化」无法区分，只能靠推理，在真机上为此绕了数轮弯路。现已一眼可辨。
+
+### 测试
+
+- mock 对齐真实运行时语义：`binding()` 只对已 retain 会话有值；`open()` 不是导航；
+  **`ctx.get` 忠实还原 strict 只看 fiber ACTIVE**（上一版 mock 声明了 strict 却从不使用，
+  把错误前提固化成了假象）。
+- M1-G 组扩到 10 项：真路径 / 老宿主兜底正反两面 / runId 拦截 / 归档拦截 / phase 拦截 /
+  state 拦截 / byId-ids 分歧 / done 也跳 / 晚激活 / 半初始化实例不被永久缓存 / workspaces 缺失不跳。
+- 变异验证 8 处，每处都由对应断言抓住（见下）。其中「半初始化实例」用例最初**测不出缺陷** ——
+  它改的是同一实例的方法，缓存下来的旧引用后来照样能用；改为让 cordis 语义下**新实例**接手
+  才真正暴露问题。
+- 变异验证 8 处全部被对应断言抓住：还原 v0.6.2 的 `openSession` / 还原 `kind === "attention"`
+  限制 / 解析阶段即缓存 / 去掉惰性重取 / 读服务而非快照 / byId 取代 ids / 去掉 phase 闸门 /
+  去掉 state 闸门 / 去掉归档闸门 / 去掉 binding 兜底。
+
 ## [0.6.2] — 2026-10-08
 
 minor 版：重做设置页的「消息格式」与「保存」两处交互，并修一个导致设置页整页打不开的渲染崩溃。

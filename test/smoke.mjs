@@ -34,8 +34,29 @@ global.document = {
   documentElement: { lang: 'zh' },
   hasFocus: () => pageFocus
 };
+// Notification mock：**双形态**（另一份同构实现在下面的 M1 段）。
+//   · 默认「electron 形态」：有 on/once/show，点击只走 on('click')。
+//   · 「web 形态」：标准 Web Notifications API，只有 onclick 属性。
+// 生产代码对两者都做能力探测后挂载，故两种环境都必须能跑通 —— 任一路径被删都有用例抓住。
+// ⚠️ 曾在此断言「Electron 渲染进程的 Notification 是 EventEmitter、onclick 不可用」，
+//    那是**错的**：真机 `deliverLog` 报 hasOn:false，证明渲染进程是标准 Web API
+//    （webPreferences: contextIsolation:true / nodeIntegration:false / sandbox:true），
+//    错因是拿**主进程**（Node 侧）的用法去推断渲染进程。保留双形态 mock 的价值在于
+//    **实现不押注任何单一宿主形态**，而非因为 Electron 有多特殊。
 global.Notification = class {
-  constructor(title, opts) { this.title = title; this.opts = opts; this.onclick = null; notifications.push({ n: this, title, body: opts.body, tag: opts.tag }); }
+  constructor(title, opts) {
+    this.title = title; this.opts = opts; this.shown = false;
+    this._handlers = new Map();
+    const self = this;
+    // 本形态下点击只派发 on('click') 监听器，不回落 onclick ——
+    // 否则「只挂 onclick、未挂 on」的实现在此也能蒙混过关。
+    notifications.push({ n: this, title, body: opts.body, tag: opts.tag, fire: (ev) => {
+      for (const fn of [...(self._handlers.get(ev) ?? [])]) fn();
+    } });
+  }
+  on(ev, fn) { const a = this._handlers.get(ev) ?? []; a.push(fn); this._handlers.set(ev, a); return this; }
+  once(ev, fn) { return this.on(ev, fn); }
+  show() { this.shown = true; }
   close() {}
   static get permission() { return notifPerm; }
   static requestPermission() { return Promise.resolve(notifPerm); }
@@ -155,24 +176,55 @@ function reload(overrides = {}) {
       createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
     }
   };
-  const NotificationCls = class {
-    constructor(title, o) {
-      if (bag.notificationThrows) throw new Error('notification constructor failed');
-      this.title = title; this.opts = o; this.onclick = null;
-      bag.notifications.push({ n: this, title, body: o.body, tag: o.tag });
-      // Electron Windows: Chromium 用 origin + tag/token 生成原生 Tag；
-      // 原生失败不一定回传 Web Notification error，所以只模拟成功 show。
-      if (bag.nativeTagLimit) {
-        const nativeTag = `n#dsh-app://app#${o.tag || '0'.repeat(32)}`;
-        bag.nativeAttempts ??= [];
-        bag.nativeAttempts.push({ nativeTag, title, shown: nativeTag.length <= bag.nativeTagLimit });
-        if (nativeTag.length <= bag.nativeTagLimit) queueMicrotask(() => this.onshow?.({}));
-      }
+  // Electron Windows: Chromium 用 origin + tag/token 生成原生 Tag；
+  // 原生失败不一定回传 Web Notification error，所以只模拟成功 show。
+  function recordNativeAttempt(n, title, o) {
+    if (!bag.nativeTagLimit) return;
+    const nativeTag = `n#dsh-app://app#${o.tag || '0'.repeat(32)}`;
+    bag.nativeAttempts ??= [];
+    bag.nativeAttempts.push({ nativeTag, title, shown: nativeTag.length <= bag.nativeTagLimit });
+    if (nativeTag.length <= bag.nativeTagLimit) queueMicrotask(() => n.onshow?.({}));
+  }
+  // 双形态 Notification mock（与文件头的基线 mock 同构）：默认 electron 形态
+  // （on/once/show，点击走 on('click')）；notificationStyle:'web' 切换为标准 Web API
+  // （只有 onclick）。生产代码两条路都挂，故两种环境都要覆盖。
+  // 注：曾断言「Electron 渲染进程不是 Web API」—— 真机 hasOn:false 已推翻；
+  // 保留双形态是为了不押注单一宿主形态。
+  const NotificationCls = (() => {
+    if (overrides.notificationStyle === 'web') {
+      // 真实浏览器：Web Notifications API，对象上有可覆盖的 onclick 属性，
+      // 没有 on()/show()。用于锁住「onclick 那一路不能被删」。
+      return class {
+        constructor(title, o) {
+          if (bag.notificationThrows) throw new Error('notification constructor failed');
+          this.title = title; this.opts = o; this.onclick = null;
+          bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: () => { if (typeof this.onclick === 'function') this.onclick(); } });
+          recordNativeAttempt(this, title, o);
+        }
+        close() {}
+        static get permission() { return bag.notifPerm; }
+        static requestPermission() { return Promise.resolve(bag.notifPerm); }
+      };
     }
-    close() {}
-    static get permission() { return bag.notifPerm; }
-    static requestPermission() { return Promise.resolve(bag.notifPerm); }
-  };
+    return class {
+      constructor(title, o) {
+        if (bag.notificationThrows) throw new Error('notification constructor failed');
+        this.title = title; this.opts = o; this.shown = false;
+        this._handlers = new Map();
+        const self = this;
+        // 同上：点击只派发 on('click')，不回落 onclick
+        bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: (ev) => {
+          for (const fn of [...(self._handlers.get(ev) ?? [])]) fn();
+        } });
+      }
+      on(ev, fn) { const a = this._handlers.get(ev) ?? []; a.push(fn); this._handlers.set(ev, a); return this; }
+      once(ev, fn) { return this.on(ev, fn); }
+      show() { this.shown = true; }
+      close() {}
+      static get permission() { return bag.notifPerm; }
+      static requestPermission() { return Promise.resolve(bag.notifPerm); }
+    };
+  })();
   // 直接复用基类：构造器把实例写入同一 registry（无法重定向），各 group 起始已重置
   const ESCls = global.EventSource;
   const ctxObj = {
@@ -212,10 +264,34 @@ const { name, inject, apply } = bundle;
 
 const sessionsRows = { A: { id: 'A', displayTitle: '会话A' }, B: { id: 'B', displayTitle: '会话B' } };
 const opened = [];
+// v0.6.3：mock 对齐真实运行时语义 ——
+//   sessions.binding(id) 只对 **已 retain** 的会话有值（scopes 只在 retain() 时
+//   materialize），且 binding().session.open() 是「拉事件流」，**不是**切视图；
+//   真正切视图的是 uiWorkspace.openSession()（replaceMain → retain mainView +
+//   selection.set + layout.selectPanel(null)）。
+// 旧 mock 让 binding() 对任意 id 都返回 { session: { open } }，把 session.open()
+// 伪装成「切会话」，正是本缺陷长期未被测试发现的根因。
+const retained = new Set(['A']);
+const archivedIds = [];
+// byId ⊋ ids：对齐官方注释（session-link.js）——byId 另含 live Client generation
+// 的本地兜底行，宿主列表（ids）已丢弃的会话在 byId 里仍可能有行。
+// ZOMBIE 只在 byId、不在 ids，用于验证实现用的是 ids（官方口径）而非 byId。
+sessionsRows.ZOMBIE = { id: 'ZOMBIE', displayTitle: '宿主已丢弃的会话' };
+const zombieInIds = () => { delete sessionsRows.ZOMBIE; };
+const zombieInByIdOnly = () => { sessionsRows.ZOMBIE = { id: 'ZOMBIE', displayTitle: '宿主已丢弃的会话' }; };
+let sessionsPhase = 'ready';
 const sessionsSvc = {
-  list: { getSnapshot: () => ({ byId: sessionsRows, ids: Object.keys(sessionsRows), phase: 'ready' }) },
-  binding: (id) => ({ session: { open: () => opened.push(id) } })
+  list: { getSnapshot: () => ({ byId: sessionsRows, ids: Object.keys(sessionsRows).filter((k) => k !== 'ZOMBIE'), phase: sessionsPhase }) },
+  binding: (id) => (retained.has(id) ? { session: { open: () => opened.push(['binding.open', id]) } } : undefined),
+  retain: (id) => { if (!sessionsRows[id]) throw new Error(`sessions.retain: unknown session ${id}`); retained.add(id); },
 };
+const uiWorkspaceSvc = {
+  openSession: (id) => { sessionsSvc.retain(id); opened.push(['uiWorkspace.openSession', id]); },
+};
+// phase/state 对齐官方 sessionLinkState 的判据（见 lib/client.js linkStateOk）
+let workspacesPhase = 'ready';
+let workspacesState = 'ready';
+const workspacesSvc = { list: { getSnapshot: () => ({ archivedSessionIds: archivedIds, phase: workspacesPhase, state: workspacesState }) } };
 let status = new Map();
 const statusSubs = new Set();
 let currentKey = 'A';
@@ -227,8 +303,20 @@ const uiSessionSvc = {
   }
 };
 let cleanup = null;
+// mock 忠实还原 cordis ReflectService._getImpl 的 strict 语义：
+//   `if (strict && impl.fiber.state !== 2) return`
+// 即 **strict 只看服务提供方是否 ACTIVE，与 inject 声明无关**。上一版 mock 声明了
+// strict 却从不使用，把「必须传 false」这个（错误的）前提固化成了假象。
+// activeSet 控制哪些服务视为已激活；inactiveOnlySvc 模拟「已注册但未 ACTIVE」。
+const activeSet = new Set(['sessions', 'uiSession', 'uiWorkspace', 'workspaces']);
 const ctx = {
-  get: (svc) => (svc === 'sessions' ? sessionsSvc : svc === 'uiSession' ? uiSessionSvc : undefined),
+  get: (svc, strict = true) => {
+    const svcMap = { sessions: sessionsSvc, uiSession: uiSessionSvc, uiWorkspace: uiWorkspaceSvc, workspaces: workspacesSvc };
+    const impl = svcMap[svc];
+    if (!impl) return undefined;
+    if (strict && !activeSet.has(svc)) return undefined;
+    return impl;
+  },
   sessions: sessionsSvc,
   uiSession: uiSessionSvc,
   effect: (fn) => { fn(); cleanup = fn; }
@@ -300,9 +388,20 @@ tick();
 assert(count('任务已完成') === 1, '页面隐藏时完成弹通知');
 const doneN = notifications.filter((x) => x.title === '任务已完成')[0];
 assert(doneN.body.includes('耗时') && doneN.body.includes('秒'), '完成正文含耗时小结');
+// ⚠️ 紧跟在上面那次完成之后触发 unread 边沿 —— 二者本属**同一次完成**
+//    （SSE done 帧 + uiSession completionUnread 双源，实测投递仅差 ~120ms）。
+//    旧实现这里直连 notifyDone()、绕过 minIntervalMs 节流，于是弹了**两条**。
+//    现在统一走 maybeNotifyDone → 共用会话级节流，双源只剩一条。
 S('A', { running: false, pendingInteraction: undefined, completionUnread: true });
 tick();
-assert(count('任务已完成') === 1, '同次完成的 unread 边沿不重复通知');
+assert(count('任务已完成') === 1, 'unread 边沿与完成双源去重（同一次完成只弹一条）');
+// 节流窗口过后，独立的另一次 unread 仍应正常提醒
+await wait(6400); // > minIntervalMs 默认 6000ms
+S('A', { running: true, pendingInteraction: undefined, completionUnread: false });
+tick();
+S('A', { running: false, pendingInteraction: undefined, completionUnread: true });
+tick();
+assert(count('任务已完成') === 2, '节流窗口外的另一次完成仍正常提醒');
 
 // 主开关
 pageFocus = true;
@@ -319,9 +418,53 @@ window.__dshPharos.resetConfig();
 S('B', { running: true, pendingInteraction: approval, completionUnread: false });
 tick();
 const lastN = notifications[notifications.length - 1];
-lastN.n.onclick?.();
-assert(opened.includes('B'), '点击待办通知尝试打开会话B');
+// 前置条件显式断言：点击**之前** B 必须仍未被 retain。
+// 上一版把它写成 `!retained.has('B') || <同义断言>`，而第 338 行的 onclick 本身就会
+// retain('B')，导致该断言恒真且与前序同义（缺陷 4）。这里改为在点击前断前置条件，
+// 点击后再断导航结果 —— 两者不可互相掩盖。
+assert(!retained.has('B'), '前置条件：点击前 B 未被 retain（不在 mainView 集）');
+lastN.fire?.("click");
+assert(opened.some(([via, id]) => via === 'uiWorkspace.openSession' && id === 'B'), '未 retain 的后台会话点击后仍完成导航（旧实现在此空转）');
+assert(!opened.some(([via]) => via === 'binding.open'), '点击通知不走 binding().session.open()（那是拉事件流，非导航）');
 assert(windowFocused === true, '点通知聚焦窗口');
+
+// v0.6.3：归档会话不得导航（对齐官方 sessionLinkState 的 archived 分支）
+archivedIds.push('B');
+const beforeArchived = opened.length;
+S('B', { running: true, pendingInteraction: { ...approval, key: 'k-approve-arch' }, completionUnread: false });
+tick();
+notifications[notifications.length - 1].fire?.("click");
+assert(opened.length === beforeArchived, '归档会话点击不跳转');
+archivedIds.length = 0;
+
+// v0.6.3：官方口径「加载中一律不跳」。phase==='pending' 时 archivedSessionIds
+// 通常还是空数组，若放行就会漏判归档 —— 故必须按官方返回 loading 拦住。
+workspacesPhase = 'pending';
+const beforePending = opened.length;
+S('B', { running: true, pendingInteraction: { ...approval, key: 'k-approve-pending' }, completionUnread: false });
+tick();
+notifications[notifications.length - 1].fire?.("click");
+assert(opened.length === beforePending, 'workspaces.phase=pending（加载中）不跳转');
+workspacesPhase = 'ready';
+
+// v0.6.3：workspaces.state==='error' 时投影不可信，不跳
+workspacesState = 'error';
+const beforeWsError = opened.length;
+S('B', { running: true, pendingInteraction: { ...approval, key: 'k-approve-wserr' }, completionUnread: false });
+tick();
+notifications[notifications.length - 1].fire?.("click");
+assert(opened.length === beforeWsError, 'workspaces.state=error（投影出错）不跳转');
+workspacesState = 'ready';
+
+// v0.6.3：用 ids 而非 byId 判成员（官方 sessionLinkState 口径）。byId 里还留着
+// 本地兜底行、但宿主列表已丢弃的会话，必须报「不可用」而不导航。
+zombieInByIdOnly();
+const beforeZombie = opened.length;
+S('ZOMBIE', { running: true, pendingInteraction: { ...approval, key: 'k-approve-zombie', sessionId: 'ZOMBIE' }, completionUnread: false });
+tick();
+notifications[notifications.length - 1].fire?.("click");
+assert(opened.length === beforeZombie, '宿主列表已丢弃（仅 byId 有兜底行）的会话不跳转');
+zombieInIds();
 
 // 清理当前 pending
 S('B', { running: true, pendingInteraction: undefined, completionUnread: false });
@@ -498,24 +641,53 @@ const m1Wait = (ms) => new Promise((r) => setTimeout(r, ms));
 function m1Reload(opts = {}) {
   return reload(opts);
 }
-function m1Apply(r, { extraRows = {} } = {}) {
+function m1Apply(r, { extraRows = {}, noUiWorkspace = false, noWorkspaces = false } = {}) {
   const rows = { A: { id: 'A', displayTitle: '会话A' }, B: { id: 'B', displayTitle: '会话B' }, D2: { id: 'D2', displayTitle: '双源' }, E1: { id: 'E1', displayTitle: 'SSE' }, ...extraRows };
+  // v0.6.3：对齐真实运行时 —— binding() 只对已 retain 的会话有值，导航靠 uiWorkspace。
+  const retained = new Set(['A']);
   const sessions = {
     list: { getSnapshot: () => ({ byId: rows, ids: Object.keys(rows), phase: 'ready' }) },
-    binding: (id) => ({ session: { open: () => r.bag.opened.push(id) } })
+    binding: (id) => (retained.has(id) ? { session: { open: () => r.bag.opened.push(['binding.open', id]) } } : undefined),
+    retain: (id) => { if (!rows[id]) throw new Error(`sessions.retain: unknown session ${id}`); retained.add(id); }
   };
+  const uiWorkspace = { openSession: (id) => { sessions.retain(id); r.bag.opened.push(['uiWorkspace.openSession', id]); } };
+  // workspaces 只提供 .list（与真实服务同形）：归档/phase/state 都在**快照**上。
+  const archivedSessionIds = [];
+  const workspaces = { list: { getSnapshot: () => ({ archivedSessionIds, phase: 'ready', state: 'ready' }) } };
   const status = new Map();
   const subs = new Set();
   const uiSession = {
     current: { value: { get key() { return 'A'; } } },
     sessionStatus: { getSnapshot: () => status, subscribe: (fn) => { subs.add(fn); return () => subs.delete(fn); } }
   };
+  // 忠实还原 cordis `_getImpl` 的 strict 语义：strict 只看提供方 fiber 是否 ACTIVE。
+  // · noUiWorkspace / noWorkspaces：服务**根本没注册**（老宿主），strict 与
+  //   non-strict 都拿不到。
+  // · deactivate('uiWorkspace')：服务**已注册但尚未 ACTIVE** —— strict 返回
+  //   undefined、non-strict 返回实例，正是把半初始化实例永久缓存的那个窗口（缺陷 1）。
+  const active = new Set(['sessions', 'uiSession', 'workspaces', ...(noUiWorkspace ? [] : ['uiWorkspace'])]);
+  const svcMap = {
+    sessions, uiSession,
+    uiWorkspace: noUiWorkspace ? null : uiWorkspace,
+    workspaces: noWorkspaces ? null : workspaces,
+  };
   const ctxObj = {
-    get: (s) => (s === 'sessions' ? sessions : s === 'uiSession' ? uiSession : undefined),
+    get: (s, strict = true) => {
+      const impl = svcMap[s];
+      if (impl === null || impl === undefined) return undefined;
+      if (strict && !active.has(s)) return undefined;
+      return impl;
+    },
     sessions, uiSession, effect: () => {}
   };
   r.bundle.apply(ctxObj);
-  return { sessions, status, subs: [...subs], tick: () => { for (const s of [...subs]) s(); } };
+  const setCurrent = (k) => { uiSession.current.value = { get key() { return k; } }; };
+  const activate = (s) => active.add(s);
+  const deactivate = (s) => active.delete(s);
+  // 替换服务**实例**（cordis 重启/重建服务会产生新对象，旧引用不会自动升级）——
+  // 这是缺陷 1 能被真正测到的关键。
+  const replaceService = (s, impl) => { svcMap[s] = impl; };
+  return { sessions, uiWorkspace, workspaces, archivedSessionIds, ctxObj, activate, deactivate, replaceService, setCurrent, status, subs: [...subs], tick: () => { for (const s of [...subs]) s(); } };
 }
 const m1Frame = (kind, sessionId, note, extra = {}) => ({
   kind, severity: { done: 'info', error: 'error', interrupted: 'warn', limit: 'error', job: 'info', remote: 'info', test: 'info' }[kind],
@@ -872,7 +1044,7 @@ if (!m1Ready) {
     }
     // SSE 在先、unread 在后（用新的会话避开上一组节流）。
     localStorage.removeItem('dshPharos.config');
-    const r = m1Reload({ bag: { pageFocus: false } });
+    const r = m1Reload({ bag: { pageFocus: false }, notificationStyle: 'web' });
     const ui = m1Apply(r);
     const api = r.context.window.__dshPharos;
     const es = r.ES.instances.at(-1);
@@ -940,7 +1112,7 @@ if (!m1Ready) {
   // Windows 原生 tag 长度回归：构造都成功，但旧 tag 的长会话不会触发 show。
   {
     localStorage.removeItem('dshPharos.config');
-    const r = m1Reload({ bag: { pageFocus: false, nativeTagLimit: 64 } });
+    const r = m1Reload({ bag: { pageFocus: false, nativeTagLimit: 64 }, notificationStyle: 'web' });
     const ui = m1Apply(r);
     const api = r.context.window.__dshPharos;
     const es = r.ES.instances.at(-1);
@@ -1358,7 +1530,10 @@ if (!m1Ready) {
     const r = m1Reload({ bag: { pageFocus: false, notifPerm: 'denied' } });
     global.EventSource.instances.length = 0;
     r.context.document.bodyChildren.length = 0;
-    const d = m1Apply(r);
+    // T1..T6 必须存在于会话表：v0.6.3 起 openSession 先做存在性校验
+    // （uiWorkspace.openSession → sessions.retain() 对未知 id 会抛）。
+    const toastRows = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`T${i + 1}`, { id: `T${i + 1}`, displayTitle: `会话T${i + 1}` }]));
+    const d = m1Apply(r, { extraRows: toastRows });
     const es = r.ES.instances.at(-1);
     es.dispatch(m1Frame('done', 'T1', 'TOAST-1'), 'pharos');
     await m1Wait(60);
@@ -1369,7 +1544,7 @@ if (!m1Ready) {
     m1a(toastEls().length >= 1, 'toast 容器内有 toast 元素');
     // 点击 toast → 尝试打开会话
     toastEls()[0]?.fire?.('click');
-    m1a(r.bag.opened.includes('T1') || r.bag.opened.length > 0, '点击 toast 尝试打开会话');
+    m1a(r.bag.opened.some(([via, id]) => via === 'uiWorkspace.openSession' && id === 'T1'), '点击 toast → uiWorkspace.openSession(T1)');
     // 上限 4 条：连续 5 个不同事件
     for (let i = 2; i <= 6; i++) {
       es.dispatch(m1Frame('done', 'T' + i, 'TOAST-' + i), 'pharos');
@@ -1380,6 +1555,263 @@ if (!m1Ready) {
     await m1Wait(6000);
     m1a(toastEls().length === 0, 'toast 6s 后自动消失');
     void d;
+  }
+
+  // ---- M1-G: v0.6.3 跳会话回归 ----
+  //   ① 老宿主无 uiWorkspace → 降级 binding().session.open()，不抛、不静默崩
+  //   ② 会话不在表中（workflow 帧的 runId）→ 不跳，且不产生未捕获异常
+  //   ③ 系统通知对所有 kind 跳转（去掉旧的 kind==="attention" 限制）
+  {
+    localStorage.removeItem('dshPharos.config');
+    const r = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r.context.document.bodyChildren.length = 0;
+    // 6 个独立子场景各用一个会话 id：既是 SSE 去重键的区分，也都必须在会话表中
+    // （linkStateOk 查 ids —— 这正是它们必须存在的原因）。
+    const ids = ['OLD1', 'OLD2', 'LATE1', 'LATE2', 'LATE3', 'HALF1', 'HALF2', 'NOWS1'];
+    const extraRows = Object.fromEntries(ids.map((id) => [id, { id, displayTitle: `会话${id}` }]));
+    const d = m1Apply(r, { noUiWorkspace: true, extraRows });   // 模拟老宿主（无该服务）
+    const es = r.ES.instances.at(-1);
+    // ⚠️ 每个子场景用**不同的 sessionId**：SSE 侧按 `${kind}:${sessionId}` 去重
+    //    （onSseFrame 的 sseSeen，窗口 2s），同 id 连发两帧只有第一条会弹通知，
+    //    at(-1) 会拿到旧通知、onclick 重复触发同一条。
+    es.dispatch(m1Frame('done', 'OLD1', '老宿主完成'), 'pharos');
+    await m1Wait(60);
+    m1a(r.bag.notifications.length === 1, '老宿主下通知照常发出');
+    r.bag.notifications.at(-1)?.fire?.("click");
+    // OLD1 未 retain → binding() 返回 undefined → 兜底路径无动作。
+    // ⚠️ 上一版这里写的是 `opened.every(...)`，而 opened 此刻是**空数组**，
+    // [].every() === true → 恒真空断言，删掉兜底路径照样绿（缺陷 3）。改断长度。
+    m1a(r.bag.opened.length === 0, '老宿主 + 会话未 retain：兜底路径不产生任何动作');
+
+    // ①b 老宿主 + 会话**已** retain → 必须真的走 binding().open()（兜底分支的正向覆盖）
+    d.sessions.retain('OLD2');
+    es.dispatch(m1Frame('done', 'OLD2', '老宿主已完成'), 'pharos');
+    await m1Wait(60);
+    r.bag.notifications.at(-1)?.fire?.("click");
+    m1a(r.bag.opened.some(([via, id]) => via === 'binding.open' && id === 'OLD2'), '老宿主 + 已 retain：走 binding().open() 兜底');
+
+    // ② 未知 sessionId（workflow 帧的 runId）：存在性校验必须拦下
+    const r2 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r2.context.document.bodyChildren.length = 0;
+    m1Apply(r2);
+    const es2 = r2.ES.instances.at(-1);
+    let threw = false;
+    try {
+      es2.dispatch(m1Frame('workflow', 'run-not-a-session', '阶段推进'), 'pharos');
+      await m1Wait(60);
+      r2.bag.notifications.at(-1)?.fire?.("click");
+    } catch (error) {
+      threw = true; void error;
+    }
+    m1a(!threw, '未知 sessionId 点击不产生未捕获异常');
+    m1a(r2.bag.opened.length === 0, '未知 sessionId（runId）不跳转（retain 抛错前拦下）');
+
+    // ③ done 通知也应跳转（旧的 kind==="attention" 限制）
+    const r3 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r3.context.document.bodyChildren.length = 0;
+    m1Apply(r3);
+    const es3 = r3.ES.instances.at(-1);
+    es3.dispatch(m1Frame('done', 'B', '完成也跳'), 'pharos');
+    await m1Wait(60);
+    r3.bag.notifications.at(-1)?.fire?.("click");
+    m1a(r3.bag.opened.some(([via, id]) => via === 'uiWorkspace.openSession' && id === 'B'), 'done 类系统通知点击也跳会话（不再限 attention）');
+
+    // ④ uiWorkspace **晚激活**：与 uiSession 同样按树序激活，可能在插件 boot 之后
+    //    才 ACTIVE。必须能惰性取到，否则导航能力永久停留在兜底路径。
+    const r4 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r4.context.document.bodyChildren.length = 0;
+    m1Apply(r4, { noUiWorkspace: true });
+    const es4 = r4.ES.instances.at(-1);
+    es4.dispatch(m1Frame('done', 'LATE1', '服务后到'), 'pharos');
+    await m1Wait(60);
+    r4.bag.notifications.at(-1)?.fire?.("click");
+    m1a(r4.bag.opened.length === 0, 'boot 时无 uiWorkspace → 走兜底，不崩');
+    // 「服务注册进来并转 ACTIVE」的语义用 activate()/deactivate() 表达：
+    const r4b = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r4b.context.document.bodyChildren.length = 0;
+    const d4b = m1Apply(r4b, { extraRows });
+    d4b.deactivate('uiWorkspace');           // 已 provide 但尚未 ACTIVE
+    const es4b = r4b.ES.instances.at(-1);
+    es4b.dispatch(m1Frame('done', 'LATE2', '未激活'), 'pharos');
+    await m1Wait(60);
+    r4b.bag.notifications.at(-1)?.fire?.("click");
+    // 说明：未 ACTIVE 时 strict 拿不到，non-strict 仍能端出实例；若该实例此刻
+    // 已可用（openSession 不抛），走它是**正确**行为 —— 非 strict 探测本就允许
+    // 「先试，不行再兜」。真正的缺陷是「把不可用的实例**永久缓存**」，由 ⑤ 覆盖。
+    m1a(r4b.bag.opened.length === 0 || r4b.bag.opened.every(([via]) => via === 'uiWorkspace.openSession' || via === 'binding.open'),
+      'uiWorkspace 未 ACTIVE 时不产生异常（走可用路径或兜底）');
+    d4b.activate('uiWorkspace');             // 转 ACTIVE
+    es4b.dispatch(m1Frame('done', 'LATE3', '已激活'), 'pharos');
+    await m1Wait(60);
+    r4b.bag.notifications.at(-1)?.fire?.("click");
+    m1a(r4b.bag.opened.some(([via, id]) => via === 'uiWorkspace.openSession' && id === 'LATE3'), 'uiWorkspace 转 ACTIVE 后导航恢复（惰性重取生效）');
+
+    // ⑤ **缺陷 1 专属回归**：未 ACTIVE 时 non-strict 会把半初始化实例端上来，
+    //    且该实例 openSession **抛错**（模拟构造未完成）。若实现把它缓存进 bindings，
+    //    此后每次点击都复用坏实例、抛错被吞 → **永久**退回兜底 —— 即本次要修的 bug。
+    //    因此：解析阶段不得缓存；服务转 ACTIVE 后必须立刻恢复正常导航。
+    const r5 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r5.context.document.bodyChildren.length = 0;
+    const d5 = m1Apply(r5, { extraRows });
+    // ⚠️ 半初始化实例必须是**独立对象**，转 ACTIVE 时由**另一个对象**接手。
+    //    上一版（以及我第一版测试）改的是同一实例的方法，于是即便实现把坏实例
+    //    永久缓存，缓存下来的引用后来照样「能用」—— 断言仍绿，测不出缺陷。
+    //    cordis 的真实语义正是如此：provide/重启会产生**新的**服务实例，
+    //    旧引用不会自动升级。
+    const halfInit = { openSession: () => { throw new Error('uiWorkspace not yet initialized'); } };
+    d5.replaceService('uiWorkspace', halfInit);
+    d5.deactivate('uiWorkspace');           // 已 provide（实例在）但尚未 ACTIVE
+    const es5 = r5.ES.instances.at(-1);
+    es5.dispatch(m1Frame('done', 'HALF1', '半初始化'), 'pharos');
+    await m1Wait(60);
+    r5.bag.notifications.at(-1)?.fire?.("click");
+    m1a(r5.bag.opened.every(([via]) => via !== 'uiWorkspace.openSession'), '半初始化的 uiWorkspace 不产生导航（抛错被兜住，不崩）');
+    // 服务完成构造：cordis 会用**新实例**替换，旧的半初始化引用就此失效。
+    d5.activate('uiWorkspace');
+    d5.replaceService('uiWorkspace', { openSession: (id) => { r5.bag.opened.push(['uiWorkspace.openSession', id]); } });
+    es5.dispatch(m1Frame('done', 'HALF2', '恢复正常'), 'pharos');
+    await m1Wait(60);
+    r5.bag.notifications.at(-1)?.fire?.("click");
+    m1a(r5.bag.opened.some(([via, id]) => via === 'uiWorkspace.openSession' && id === 'HALF2'), '坏实例未被永久缓存：转 ACTIVE 后导航恢复（缺陷 1 回归）');
+
+    // ⑥ workspaces 服务缺失 → 官方口径是「不可判定就不跳」，不得冒险导航
+    const r6 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r6.context.document.bodyChildren.length = 0;
+    m1Apply(r6, { noWorkspaces: true, extraRows });
+    const es6 = r6.ES.instances.at(-1);
+    es6.dispatch(m1Frame('done', 'NOWS1', '无归档投影'), 'pharos');
+    await m1Wait(60);
+    r6.bag.notifications.at(-1)?.fire?.("click");
+    m1a(r6.bag.opened.length === 0, 'workspaces 缺失 → 归档状态不可判定 → 不跳转');
+
+    // ⑦ 判定轨迹（可观测性）：「点了没跳」的唯一失败模式是静默，必须留可读记录
+    const r7 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r7.context.document.bodyChildren.length = 0;
+    m1Apply(r7, { noWorkspaces: true, extraRows });
+    const es7 = r7.ES.instances.at(-1);
+    es7.dispatch(m1Frame('done', 'NOWS1', '归档投影缺失'), 'pharos');
+    await m1Wait(60);
+    r7.bag.notifications.at(-1)?.fire?.("click");
+    const dbg7 = r7.context.window.__dshPharos.debug();
+    m1a(Array.isArray(dbg7.navLog) && dbg7.navLog.length >= 1, 'debug().navLog 记录本次点击');
+    m1a(dbg7.navLog.at(-1)?.outcome === 'gate-blocked', '被闸门拦下时 outcome=gate-blocked');
+    m1a(dbg7.navLog.at(-1)?.detail === 'workspaces-service-missing', `记录具体拦截原因（实得：${dbg7.navLog.at(-1)?.detail}）`);
+    m1a(dbg7.navService?.uiWorkspace === 'ok', `debug().navService 暴露服务可用性（uiWorkspace=${dbg7.navService?.uiWorkspace}）`);
+
+    // 成功路径也要留痕，且 navService 要反映真实服务状态
+    const r8 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r8.context.document.bodyChildren.length = 0;
+    const rows8 = Object.fromEntries(['R8A'].map((id) => [id, { id, displayTitle: `会话${id}` }]));
+    m1Apply(r8, { extraRows: rows8 });
+    const es8 = r8.ES.instances.at(-1);
+    es8.dispatch(m1Frame('done', 'R8A', '完成并跳转'), 'pharos');
+    await m1Wait(60);
+    r8.bag.notifications.at(-1)?.fire?.("click");
+    const dbg8 = r8.context.window.__dshPharos.debug();
+    m1a(dbg8.navLog.at(-1)?.outcome === 'navigated' && dbg8.navLog.at(-1)?.via === 'uiWorkspace', '成功路径 outcome=navigated/via=uiWorkspace');
+    // 真机教训：完成通知的 sessionId 常就是**当前会话**（用户在这个会话里让 agent 干活，
+    // 跑完触发通知，点它 → 正确导航到当前会话 → 界面当然不变）。轨迹必须能区分
+    // 「导航成功」与「点了等于没动」，否则只能靠推理误判成 bug。
+    m1a(dbg8.navLog.at(-1)?.alreadyCurrent === false, '非当前会话：alreadyCurrent=false（导航成功即换视图）');
+    const r9 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r9.context.document.bodyChildren.length = 0;
+    const rows9 = { A: { id: 'A', displayTitle: '当前会话' } };
+    m1Apply(r9, { extraRows: rows9 });   // m1Apply 的 current 恒为 'A'
+    const es9 = r9.ES.instances.at(-1);
+    es9.dispatch(m1Frame('done', 'A', '当前会话完成'), 'pharos');
+    await m1Wait(60);
+    r9.bag.notifications.at(-1)?.fire?.("click");
+    const dbg9 = r9.context.window.__dshPharos.debug();
+    m1a(dbg9.navLog.at(-1)?.outcome === 'navigated', '当前会话的完成通知：仍然判定为 navigated');
+    m1a(dbg9.navLog.at(-1)?.alreadyCurrent === true, 'alreadyCurrent=true —— 区分「导航成功但界面不变」与真跳转');
+
+    // ⑧ 真机根因防线：点击时读到的 currentSessionId 若与采样时不同，
+    //    说明读到了陈旧值 → alreadyCurrent 会误报 true，真机曾因此误判数轮。
+    const r10 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r10.context.document.bodyChildren.length = 0;
+    const rows10 = { A: { id: 'A', displayTitle: '甲' }, B: { id: 'B', displayTitle: '乙' } };
+    const d10 = m1Apply(r10, { extraRows: rows10 });
+    // 让 uiSession.current 在 apply 之后切到 B（模拟用户切走）
+    d10.setCurrent('B');
+    const es10 = r10.ES.instances.at(-1);
+    es10.dispatch(m1Frame('done', 'A', '甲完成'), 'pharos');
+    await m1Wait(60);
+    r10.bag.notifications.at(-1)?.fire?.("click");
+    const dbg10 = r10.context.window.__dshPharos.debug();
+    m1a(dbg10.navLog.at(-1)?.currentAtClick === 'B', `navLog 记录点击时的 currentSessionId（实得 ${dbg10.navLog.at(-1)?.currentAtClick}）`);
+    m1a(dbg10.navLog.at(-1)?.alreadyCurrent === false, '已在 B 时点 A 的通知 → alreadyCurrent=false（真跳转）');
+    m1a(dbg10.navService?.currentSessionId === 'B', 'navService 采样时的当前会话与点击时一致');
+    // ⑨ 真实浏览器（Web Notifications API）：onclick 那一路**不能被删**。
+    //    生产代码对两种宿主形态都挂载（on('click') 与 onclick），两条都要在。
+    const r11 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' }, notificationStyle: 'web' });
+    global.EventSource.instances.length = 0;
+    r11.context.document.bodyChildren.length = 0;
+    const rows11 = { W1: { id: 'W1', displayTitle: '网页会话' } };
+    m1Apply(r11, { extraRows: rows11 });
+    const es11 = r11.ES.instances.at(-1);
+    es11.dispatch(m1Frame('done', 'W1', '浏览器完成'), 'pharos');
+    await m1Wait(60);
+    r11.bag.notifications.at(-1)?.fire?.("click");
+    const dbg11 = r11.context.window.__dshPharos.debug();
+    m1a(r11.bag.opened.some(([via, id]) => via === 'uiWorkspace.openSession' && id === 'W1'), 'web 形态：onclick 一路同样能跳会话（不只 on() 那条）');
+
+    // ⑪ 真机回归：同一次完成曾弹**两条**系统通知（SSE done + completionUnread
+    //     边沿，直连 notifyDone 绕过 minIntervalMs 节流，实测两次仅差 ~120ms）。
+    const r13 = m1Reload({ bag: { pageFocus: false, notifPerm: 'granted' } });
+    global.EventSource.instances.length = 0;
+    r13.context.document.bodyChildren.length = 0;
+    const d13 = m1Apply(r13, { extraRows: { DD1: { id: 'DD1', displayTitle: '双源会话' } } });
+    r13.context.window.__dshPharos.setConfig({ doneHiddenOnly: false, minIntervalMs: 6000 });
+    await m1Wait(120);
+    const es13 = r13.ES.instances.at(-1);
+    es13.dispatch(m1Frame('done', 'DD1', '完成'), 'pharos');   // 来源① SSE done 帧
+    await m1Wait(40);
+    // 来源② uiSession 的 completionUnread 边沿（直接驱动 statusStore，与其它用例同法）
+    d13.status.set('DD1', { running: true, pendingInteraction: undefined, completionUnread: false });
+    d13.tick();
+    await m1Wait(20);
+    d13.status.set('DD1', { running: false, pendingInteraction: undefined, completionUnread: true });
+    d13.tick();
+    await m1Wait(80);
+    m1a(r13.bag.notifications.length === 1, `同一次完成只弹一条（实得 ${r13.bag.notifications.length} 条）`);
+
+    // ⑩ 投递轨迹：区分「通知没发」与「发了但点击没回来」，并记录点击实际来源渠道。
+    //    真机曾因 navLog 空而无法判断到底是哪一环断掉。
+    m1a(Array.isArray(dbg11.deliverLog) && dbg11.deliverLog.some(e => e.via === 'system-notification' && e.kind === 'done'),
+      'deliverLog 记录系统通知投递');
+    m1a(dbg11.navLog.at(-1)?.from === 'system-notification', `navLog 记录点击来自系统通知（实得 ${dbg11.navLog.at(-1)?.from}）`);
+    // 页内 toast 点击也要留痕，且 via 不同 —— 两条渠道可区分
+    const r12 = m1Reload({ bag: { pageFocus: false, notifPerm: 'denied' } });
+    global.EventSource.instances.length = 0;
+    r12.context.document.bodyChildren.length = 0;
+    const rows12 = { T9: { id: 'T9', displayTitle: 'toast会话' } };
+    m1Apply(r12, { extraRows: rows12 });
+    const es12 = r12.ES.instances.at(-1);
+    es12.dispatch(m1Frame('done', 'T9', '走 toast'), 'pharos');
+    await m1Wait(60);
+    const box12 = r12.context.document.getElementById('dsh-pharos-toast-box') ?? r12.context.document.queryBody('.dsh-pharos-toast-box');
+    const els12 = box12 ? box12.children.filter((el) => el.className.includes('toast')) : [];
+    m1a(els12.length >= 1, '权限 denied → 走页内 toast');
+    els12[0]?.fire?.('click');
+    const dbg12 = r12.context.window.__dshPharos.debug();
+    m1a(dbg12.deliverLog.at(-1)?.via === 'dom-toast(fallback)', 'deliverLog 记录页内 toast 兜底渠道');
+    m1a(dbg12.navLog.at(-1)?.from === 'dom-toast', `navLog 区分点击来自页内 toast（实得 ${dbg12.navLog.at(-1)?.from}）`);
+
+    // 帧摘要必须带 sessionId —— 此前漏记，导致无法判断帧归属
+    m1a(dbg10.recentFrames.at(-1)?.sessionId === 'A', `pushDebugFrame 记录 sessionId（实得 ${dbg10.recentFrames.at(-1)?.sessionId}）`);
+    m1a(dbg8.navService?.uiWorkspaceCached === true, '成功调用后 uiWorkspace 才被缓存');
+    m1a(dbg8.navService?.sessionsIds > 0 && dbg8.navService?.workspacesPhase === 'ready', 'navService 反映 sessions/workspaces 投影状态');
   }
 
   // ---- M1-F: 服务端配置优先 + 失败回退 ----
