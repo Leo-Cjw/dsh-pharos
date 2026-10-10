@@ -82,7 +82,24 @@ new Notification(title, { body, tag: `dsh-pharos:${sessionId}:${kind}`, silent: 
 
 最新 client 候选 SHA-256 为 `18EF619E8810531996B241199D85A11FB5D6F12CF1B8E2D783D90E9464F3C1A6`。已复制 client、host/routes 和新增 host/desktop 到本机插件目录，保留备份，普通退出并重新启动 DSH。此时完整 `npm test` 已通过：浏览器 M1 295 项、host 330 项，以及原有 v0.3 断言。Windows 模型覆盖先超时再点击、全部事件类型，以及自动聚焦开关；其他平台不启用 requireInteraction 或恢复请求。host 测试覆盖固定协议启动、平台分支、启动失败及恢复接口来源/开关校验，测试不实际启动应用。
 
-Windows 最新候选的窗口自动恢复仍待第三次实机点击结果。macOS 行为由平台分支回归保护，本次未在 macOS 实机重测。退出/重启 DSH 后旧通知的点击监听无法恢复；此次修复不提供冷启动会话深链。新通知会保留到点击或关闭，这是避免超时丢监听的行为变化。
+第三次实机点击已确认跨会话跳转。重启后最初确实停在验收会话，但随后明确点击侧边栏 `strat`，重新读取窗口标题确认已切到 strat，才最小化并发出正文含“Windows 第三次验收”的 remote（帧 ID `45f720d9-ee31-4854-b10f-19de7aca210a`，原生 Tag `n#dsh-app://app#4E47D45C67FBCD42F447239B2D10E8E0`）。发出后另一次只读窗口清单仍显示 strat。此后未进行 computer-use 输入，直到用户反馈“跳到这个会话了”。用户反馈后、首次自动输入前，窗口清单和主视图均为验收会话。
+
+设置页 Debug 保留的点击轨迹进一步确认：
+
+```json
+{
+  "sessionId": "session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc",
+  "outcome": "navigated",
+  "from": "system-notification",
+  "via": "uiWorkspace",
+  "alreadyCurrent": false,
+  "currentAtClick": "session-52766c78-2c8b-4911-9f78-d20217e418ad"
+}
+```
+
+其中 `currentAtClick` 是 strat 的 ID，目标 `sessionId` 是验收会话 ID，当前 `currentSessionId` 也等于目标；因此这不是“原本就在目标会话”产生的假通过。随后一条轨迹为 `outcome=focus-requested, via=desktop-protocol, status=200`。200 只代表协议启动请求成功，不单独当作前台聚焦的证明；本机用户反馈已跳到目标会话，首次自动输入前窗口已可见，结合跨会话轨迹构成此次实机结果。未另测所有 Windows 前台焦点限制或多桌面场景。
+
+macOS 行为由平台分支回归保护，本次未在 macOS 实机重测。退出/重启 DSH 后旧通知的点击监听无法恢复；此次修复不提供冷启动会话深链。新通知会保留到点击或关闭，这是避免超时丢监听的行为变化。
 
 该窗口恢复方案新增 `node:child_process`，历史“无 child_process”的投稿描述不再适用；README 已更新，不把本次适配视为已通过插件市场评审。
 
