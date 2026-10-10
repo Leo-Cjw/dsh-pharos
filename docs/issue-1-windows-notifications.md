@@ -109,6 +109,10 @@ macOS 行为由平台分支回归保护，本次未在 macOS 实机重测。退�
 
 后台应用场景 A 已通过：关闭设置，切到 strat 并重新观察标题，再将 Sourcetree 切到前台，DSH 保持未最小化。发送 remote 帧 `b19b4fe5-5d77-45f2-a7ac-5b457c689db2`，正文含“Windows 后台应用验证 A”；原生历史中 Tag 为 `n#dsh-app://app#7CFAC467E02A13902C573B66ECDC2790`，scenario 为 reminder。用户点击后明确反馈“是从 Sourcetree 自动返回 DSH 并切到验收会话，验收通过”；随后窗口清单与主视图也确认是目标会话。该场景的前台恢复结论依据用户实际点击反馈，通知历史只用于确认原生条目。
 
+关闭自动聚焦的场景 B 已确认后台跳转：通过设置页将 autoFocus 从 true 改为 false，API 读回 false；关闭设置，明确切到 strat，重新读取标题后最小化 DSH，再将 Sourcetree 切到前台。发送 remote 帧 `31f6532c-4c01-4118-aa39-45168b1f21c1`，正文含“Windows 关闭自动聚焦验证 B”；原生 Tag 为 `n#dsh-app://app#20E5B8BFB1E30E686BAB20952860AA4C`，scenario 为 reminder。用户点击后反馈“仍留在 Sourcetree”。在任何手动激活前，只读窗口清单已显示验收会话标题，确认点击切换了后台会话且没有恢复前台；此结论不依赖随后手动打开 DSH。
+
+B 的用户反馈后，工具两次手动激活 DSH 均返回 `failed to activate captured window`，尚未读取此次客户端 navLog。已通过配置 API 仅恢复 autoFocus=true 并读回确认，再调用项目自身恢复接口，响应 requested=true；后续截图仍是桌面，因此不把接口响应当作窗口已恢复的证明。服务端原设置已恢复，当前客户端内存状态仍待 DSH 可操作后核实。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：
