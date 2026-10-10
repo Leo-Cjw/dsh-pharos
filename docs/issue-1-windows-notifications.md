@@ -103,6 +103,12 @@ macOS 行为由平台分支回归保护，本次未在 macOS 实机重测。退�
 
 该窗口恢复方案新增 `node:child_process`，历史“无 child_process”的投稿描述不再适用；README 已更新，不把本次适配视为已通过插件市场评审。
 
+### 追加运行时回归（2026-10-10）
+
+对本机已运行的 `/pharos/api/desktop-focus` 发出不会启动恢复动作的无效请求，实际响应为：GET 405、缺 `x-pharos-desktop` 403、跨站 Origin 403、text/plain 400，与自动化预期一致。此检查没有修改配置或启动协议。
+
+另准备后台应用场景 A：关闭设置，切到 strat 并重新观察标题，再将 Sourcetree 切到前台，DSH 保持未最小化。发送 remote 帧 `b19b4fe5-5d77-45f2-a7ac-5b457c689db2`，正文含“Windows 后台应用验证 A”；原生历史中 Tag 为 `n#dsh-app://app#7CFAC467E02A13902C573B66ECDC2790`，scenario 为 reminder。当前等待用户点击反馈，不能据通知存在判定前台恢复通过。关闭自动聚焦后的实机场景尚未开始。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：
