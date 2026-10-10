@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 let failed = 0;
 let passed = 0;
@@ -32,7 +32,7 @@ const assert = (cond, msg) => {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- host 模块加载（探测形态；契约 §1 以交付为准） ----------
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const importFresh = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
 let hostMod = null;
@@ -606,7 +606,7 @@ if (store) {
   {
     const ctxHome = { get: () => ({ name: 'desktop' }) };
     const p = store.pharosFilePath(ctxHome, { DSH_HOME: '/x/home' });
-    assert(p === path.join('/x/home', 'profiles', 'desktop', 'pharos.json'), 'DSH_HOME+profiles/name 解析');
+    assert(p === path.join(path.resolve('/x/home'), 'profiles', 'desktop', 'pharos.json'), 'DSH_HOME+profiles/name 解析');
   }
   {
     const ctxDir = { get: () => ({ name: 'desktop', dir: '/custom/dir' }) };
@@ -615,7 +615,7 @@ if (store) {
   }
   {
     const p = store.pharosFilePath({ get: () => null }, { DSH_HOME: '/x/home' });
-    assert(p === path.join('/x/home', 'pharos.json'), '无 profileContext 回退 <home>/pharos.json');
+    assert(p === path.join(path.resolve('/x/home'), 'pharos.json'), '无 profileContext 回退 <home>/pharos.json');
   }
   {
     const merged = store.deepMerge(store.DEFAULT_CONFIG, { quietHours: { start: '20:00' } });

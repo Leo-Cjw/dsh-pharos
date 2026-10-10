@@ -2,6 +2,17 @@
 
 本文件记录 dsh-pharos 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### 修复
+
+- Windows 系统通知不再传入包含会话 ID 的 `tag`。Electron 把 Chromium 的 `n#origin#tag` 作为 Windows 原生 tag；真实会话 ID 会令它超过 64 字符上限，出现只有插件声音、没有系统通知的情况（[issue #1](https://github.com/Leo-Cjw/dsh-pharos/issues/1)）。去重保留在事件策略层。
+- `completionUnread` 完成信号与 running/SSE 共用完成时机、子代理过滤和节流，防止绕过 off/hidden 策略或重复提醒。隐藏页面同时检查 visibilityState。
+- 接住 Web Notification 的异步 `error`，只补一次页内提示，不重复响铃；通知诊断区分请求、显示回调、失败和静默。设置页明确测试按钮只验证页内提示。
+- 修正 host 测试的 Windows file URL 转换和根路径预期，使完整测试可以在 Windows 运行。
+
+验证范围与剩余限制见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。
+
 ## [0.6.2] — 2026-10-08
 
 minor 版：重做设置页的「消息格式」与「保存」两处交互，并修一个导致设置页整页打不开的渲染崩溃。

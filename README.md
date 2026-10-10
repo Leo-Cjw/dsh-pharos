@@ -56,8 +56,10 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 - **Webhook 渠道管理**：增删多渠道（企微/飞书/钉钉加签 + 通用透传）
 - **消息格式三档**（v0.6.2）：简洁（默认）/ 详细 / 自定义 —— 自定义档展开模板编辑区，可用 `{title}{note}{kind}{kindLabel}{summary}{duration}{tokens}{cache}{tps}{sessionId}{sessionTitle}{time}` 等变量自行排版。模板里**每写一行就是消息里的一行**（渲染层会自动补钉钉要求的硬换行，无需写尾随空格）；旧版本的预设模板在打开设置页时会自动升级到当前写法。
 - **免打扰时段**（跨午夜）、**子代理过滤**、**apiToken** 管理（`***` 掩码=保留、`""`=清除）
-- **一键测试按钮**：完成 / 需要你 / 出错 / 中断 / 上限 / 远程（走本地 deliver；`configApi` 缺失时远程类回退 `POST /trigger`）
-- **Debug 面板**：配置来源 / host 在线状态 / SSE 状态与**帧计数** / 权限 / 绑定状态 / 实时日志（自动刷新、可清空）
+- **一键测试按钮**：测试页内提示和声音；不验证系统通知。验证 Windows 系统通知请使用真实事件或 `POST /pharos/api/trigger`（`configApi` 缺失时，远程按钮回退该接口）。
+- **Debug 面板**：配置来源 / host 在线状态 / SSE 状态与**帧计数** / 权限 / 绑定状态 / 实时日志。点击刷新可查看 `recentNotifications`：`requested` 仅表示构造成功，`shown` 表示收到宿主显示回调，`error` 表示异步失败，`suppressed` 含静默原因。无回调不算显示成功，`shown` 也不能证明用户看到了横幅。
+
+Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
 > **改动自动保存**（v0.6.2）：设置页不再有底部「保存设置」按钮 —— 按钮在最底下，改完没滚到底就切走会以为没生效。现在**任何改动停止约 0.8 秒后自动落盘**（连续输入合并为一次写入），底部仅显示保存状态。host 离线时写入本地偏好层。
 
@@ -153,7 +155,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
   - v0.4 新增对 host 半事件流的消费：`EventSource('/pharos/api/stream')`（`event: pharos` 命名事件，帧 JSON）收 PharosEvent 帧，与本地 `uiSession` 信号共用同一策略层（quiet hours / 子代理过滤 / 双源 done 去重 / 通知渠道路由）；系统通知不可用时页内 toast 兜底（上限 4 条、6s 消失、点击直达会话）。`debug()` 的 `framesReceived` 一栏可直接判定「通道已通」还是「连上但零帧」。
   - 设置页视图（`lib/settings-view.js`，内联于 bundle）挂 `settings.section` —— 顶级「设置 → 消息通知」分区，`order 30`；顶级分区的壳不画标题，故视图自绘 `.pharos-title`。
   - 图标：根目录 `icon.svg`（灯塔）经 `package.json` 的 `icon` 字段供给**插件卡片 / 组合包详情页 / 组件行**；设置导航那一行因 `settings.section` 无 icon 字段，由 `installSettingsNavIcon()` 按标签文本认领并换节点。两处共用同一几何（16 网格描边，与宿主 `ui-primitives` 图标契约一致：1.3 描边 / round cap / `currentColor`），`test/smoke.mjs` 的 M1-I 段锁 `icon.svg` ↔ 内联常量一致。
-- **host 半**（`lib/index.js` + `lib/host/*`，Electron 主进程）：
+- **host 半**（`lib/index.js` + `lib/host/*`，Electron 启动的 Node host 子进程）：
   - 订阅 `session/event`（`turn/end` 的 `reason.kind` 主信号 → done/error/interrupted/limit，`agent/error` / `agent/turn-stopping` / `agent/request-error` / `jobs` 双轨兜底），构造 PharosEvent 帧。
   - `ctx.webServer.register`（同源路由，无独立端口）：`GET /pharos/api/stream`（SSE，25s 心跳）/ `POST /pharos/api/trigger`（远程触发，loopback 围栏 + `x-pharos-token`）/ `GET|PUT /pharos/api/config`（掩码语义 `***`=保留、`""`=清除）/ `GET /pharos/api/webhooks`。
   - 出站 webhook：企微/飞书/钉钉加签 + 通用透传；5s 超时、指数退避重试、失败环形缓冲 50 条；受 quiet hours / events / 子代理过滤约束。
