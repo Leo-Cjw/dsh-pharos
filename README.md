@@ -69,6 +69,8 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 
 Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
+Windows Electron 的通知保留到点击或关闭，避免横幅超时后通知中心条目的点击监听失效。启用自动聚焦时，点击会通过本机 host 打开固定的 `dsh://open`，让 DSH 恢复最小化窗口；会话切换仍走 `uiWorkspace.openSession`。macOS 与普通浏览器不使用这两个 Windows 分支。退出或重启 DSH 后，旧通知不能跳转。
+
 > **改动自动保存**（v0.6.2）：设置页不再有底部「保存设置」按钮 —— 按钮在最底下，改完没滚到底就切走会以为没生效。现在**任何改动停止约 0.8 秒后自动落盘**（连续输入合并为一次写入），底部仅显示保存状态。host 离线时写入本地偏好层。
 
 ```js
@@ -92,7 +94,7 @@ window.__dshPharos.setConfig({
   jobEvents: true,             // 后台任务事件提醒（host 半）
   workflowEvents: false,       // 工作流提醒（阶段/agent 事件；host 半，v0.6，默认关）
   workflowLog: false,          // 工作流日志（高频旁白，只进调试队列不弹通知；v0.6，默认关）
-  hostNotify: false,           // 已确认不实现：需 child_process，与投稿评审「无 child_process/eval/vm」冲突
+  hostNotify: false,           // 保留兼容字段；宿主原生通知未实现
   apiToken: "",                // 非空时 POST /pharos/api/trigger 须带 x-pharos-token 请求头
   webhooks: []                 // 出站 webhook 渠道配置（设置页管理）
 })
@@ -195,8 +197,8 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 - 首次页面加载后的第一声需要页面上有过一次用户交互（浏览器自动播放策略）。
 - 出错/被中断/达到上限依赖 reason.kind 在 `turn/end` 上的出现（0.2.0-rc.2 已见 interrupted/forked；更全的 kind 集合随运行时演进，未知 kind 静默降级由 `agent/error` 等兜底）。
 - 当轮统计（缓存命中率/TPS）依赖 host 半的官方投影 `ctx.sessionProjections`（`tokenUsage`/`sessionStats`）；投影不可用或插件中途启用（无 turn/start 基线）时静默降级为「仅耗时+tokens」，不报错。
-- 点通知"打开对应会话"为 best-effort（`sessions.binding(id)?.session.open()`），失败时仅聚焦窗口。
-- 宿主原生 osascript 通知（`hostNotify`）**已确认不实现**：它需要 `child_process` 调起 `osascript`，而本插件的投稿评审清单明确要求「无 child_process / eval / vm」。二者冲突，故保留该配置项仅为向后兼容（读得到、不生效）。要跨设备接收请用 Webhook（企微/飞书/钉钉机器人）。
+- 点击通知通过 `uiWorkspace.openSession` 切换已有会话；归档、已删除或尚未就绪的会话不保证跳转。Windows 窗口恢复依赖 DSH 注册的 `dsh://open` 协议及同机 host；关闭自动聚焦后只切后台会话，不恢复窗口。
+- 宿主原生 osascript 通知（`hostNotify`）未实现，该配置项仅保留兼容。Windows 窗口恢复新增 `node:child_process`，只启动系统 `explorer.exe` 打开固定 `dsh://open`，不执行 shell、不接受请求提供的命令或 URL。历史投稿清单的「无 child_process」描述不再适用于此候选，重新投稿前需按实际代码复核。跨设备通知仍请用 Webhook。
 - **工作流提醒（v0.6）默认关闭**，需在设置页开启 `workflowEvents`；开启需**重启 DSH** 生效（订阅在启动时建立），关闭则即时生效。`workflowLog`（高频旁白）可**独立**开启，只进调试队列不弹通知。
   → 完整效果、触发条件与排查步骤见 **[docs/sop-workflow-events.md](docs/sop-workflow-events.md)**（SOP）。 要实机验证？现成的工作流 prompt 见 **[docs/sop-verify-workflow-prompt.md](docs/sop-verify-workflow-prompt.md)**。
   ⚠️ **普通对话不会产生工作流事件** —— 仅当模型执行多 agent 工作流任务、脚本调用 `phase()`/`agent()` 时才有提醒。

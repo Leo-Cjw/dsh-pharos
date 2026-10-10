@@ -63,7 +63,7 @@ new Notification(title, { body, tag: `dsh-pharos:${sessionId}:${kind}`, silent: 
 
 测试桩保留 main 的 Web/EventEmitter 双形态；Windows tag 和 Web 异步错误用例明确使用 Web 形态，避免把 Electron 主进程的通知 API 当成渲染进程 API。合并后的 `npm test` 全部通过：浏览器 M1 280 项、host 317 项，以及原有 v0.3 断言。
 
-这次只更新 Git 开发分支，没有重新部署本机 DSH 插件或发布版本；上一节的实机结果属于合并前候选，合并后的点击跳转未另做实机验收。
+合并当时只更新 Git 开发分支；上一节的实机结果属于合并前候选。后续加载和点击对照记录见下节。
 
 ## Windows 点击跳转检查（2026-10-10）
 
@@ -71,7 +71,20 @@ new Notification(title, { body, tag: `dsh-pharos:${sessionId}:${kind}`, silent: 
 
 开发分支已包含 main 的导航修复。补充 Windows 长 ID + Web Notifications 回归，把同一模型中的 done/error/interrupted/limit/job/remote/workflow/attention 通知从显示检查延伸到点击检查：每种都必须调用 `uiWorkspace.openSession`，并传入原始完整会话 ID。`npm test` 通过：浏览器 M1 288 项、host 317 项，以及原有 v0.3 断言。
 
-实机点击验收尚未完成：computer-use 找到 `strat — DeepSeek Harness` 窗口，但重新获取窗口后两次激活均返回 `failed to activate captured window`，截图全黑。没有继续点击，也没有替换安装文件或重启 DSH。待窗口可操作后，需加载合并版，从另一个会话点击 Windows 通知，再核对主视图及 navLog；目前不能宣称 Windows 点击跳转已实机通过。
+首次尝试被窗口激活失败阻断（`failed to activate captured window`、截图全黑）。用户将 DSH 打开后，继续完成如下实机对照；期间用户按 Esc 停止的轮次均停止输入，收到“继续”后再恢复。
+
+### 通知中心点击与最小化恢复
+
+1. 加载合并候选，client SHA-256 为 `B96D2FFA9C86EB826FB6BE3CF1DEB4D69DD475DF6A2D1CBAE23279A660506829`，普通重启后设置页显示 v0.6.3。DSH 切到 `strat` 并最小化，向现有验收会话发送 remote；用户点击通知中心后反馈没有返回 DSH。Debug 确认 `result=shown`、`hasOn=false`、`navLog=[]`，当前会话仍是 strat。这次不是导航闸门失败，而是没有收到点击回调。
+2. [Electron Windows 通知实现](https://github.com/electron/electron/blob/v44.0.0/shell/browser/notifications/win/windows_toast_notification.cc) 在横幅超时后调用 `NotificationDismissed(false, ...)`；[通知基类](https://github.com/electron/electron/blob/v44.0.0/shell/browser/notifications/notification.cc) 把关闭传给委托；[Web 通知委托](https://github.com/electron/electron/blob/v44.0.0/shell/browser/notifications/platform_notification_service.cc) 转成 Chromium 的 non-persistent close；[Chromium 事件分发器](https://github.com/chromium/chromium/blob/152.0.7975.0/content/browser/notifications/notification_event_dispatcher_impl.cc) 在 close 完成后删除监听。因此原生条目仍在通知中心，不等于 Web onclick 仍能触发。此判断来自源码链与本机对照，未读取本机原生超时事件日志。
+3. Windows Electron 专用候选启用 `requireInteraction`（client SHA-256 `6A5628246AC1DCFA106A2D3C4643D44609B20D6E62ED260F97F21D04A60EE063`）。原生 XML 确认 `scenario="reminder"`；第二次 remote 的 Tag 为 `n#dsh-app://app#FB670229AEC9EE4EADFD5F31DCD98ECE`。用户点击后仍反馈窗口未恢复，但在任何手动激活前，窗口清单标题已从 strat 变成验收会话；该条通知也已从历史移除。说明点击与切会话已经恢复，窗口恢复仍失败。随后通过 computer-use 手动激活，主视图确认是目标会话；手动激活不计作通知自动聚焦通过。
+4. `window.focus()` 不能满足本机最小化恢复。当前候选增加本机 POST `/pharos/api/desktop-focus`，只启动系统 `explorer.exe` 打开固定 `dsh://open`；本机 DSH app.asar 的 `focusPrimaryWindow` 会执行 restore/show/focus，协议已注册，Windows second-instance 也调用该入口。接口仅接受 loopback、JSON、自定义桌面请求头，拒绝跨站 Origin；不接受用户提供的命令或 URL，并尊重 enabled/autoFocus。浏览器只有 Windows Electron 在点击且开启自动聚焦时请求该入口。
+
+最新 client 候选 SHA-256 为 `18EF619E8810531996B241199D85A11FB5D6F12CF1B8E2D783D90E9464F3C1A6`。已复制 client、host/routes 和新增 host/desktop 到本机插件目录，保留备份，普通退出并重新启动 DSH。此时完整 `npm test` 已通过：浏览器 M1 295 项、host 330 项，以及原有 v0.3 断言。Windows 模型覆盖先超时再点击、全部事件类型，以及自动聚焦开关；其他平台不启用 requireInteraction 或恢复请求。host 测试覆盖固定协议启动、平台分支、启动失败及恢复接口来源/开关校验，测试不实际启动应用。
+
+Windows 最新候选的窗口自动恢复仍待第三次实机点击结果。macOS 行为由平台分支回归保护，本次未在 macOS 实机重测。退出/重启 DSH 后旧通知的点击监听无法恢复；此次修复不提供冷启动会话深链。新通知会保留到点击或关闭，这是避免超时丢监听的行为变化。
+
+该窗口恢复方案新增 `node:child_process`，历史“无 child_process”的投稿描述不再适用；README 已更新，不把本次适配视为已通过插件市场评审。
 
 ## 再次排查
 

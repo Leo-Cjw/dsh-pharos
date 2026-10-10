@@ -198,7 +198,13 @@ function reload(overrides = {}) {
         constructor(title, o) {
           if (bag.notificationThrows) throw new Error('notification constructor failed');
           this.title = title; this.opts = o; this.onclick = null;
-          bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: () => { if (typeof this.onclick === 'function') this.onclick(); } });
+          let listenerActive = true;
+          bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: (event = 'click') => {
+            // Electron 的默认横幅超时派发 Web close；Chromium 会移除监听，
+            // 通知中心的后续 click 无法回到 renderer。reminder 不自动超时。
+            if (event === 'timeout') { if (!o.requireInteraction) listenerActive = false; return; }
+            if (event === 'click' && listenerActive && typeof this.onclick === 'function') this.onclick();
+          } });
           recordNativeAttempt(this, title, o);
         }
         close() {}
@@ -230,7 +236,7 @@ function reload(overrides = {}) {
   const ctxObj = {
     window: win, document: doc, Notification: NotificationCls, EventSource: ESCls,
     fetch: overrides.fetch ?? global.fetch,
-    navigator: { language: 'zh-CN', locks: overrides.noLocks ? null : { request: async (_n, cb) => cb() } },
+    navigator: { language: 'zh-CN', userAgent: overrides.userAgent ?? '', locks: overrides.noLocks ? null : { request: async (_n, cb) => cb() } },
     console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
     Promise, Math, JSON, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, WeakMap, WeakSet,
     Uint8Array, TextEncoder, Blob, URL, URLSearchParams,
@@ -1112,7 +1118,11 @@ if (!m1Ready) {
   // Windows 原生 tag 长度回归：构造都成功，但旧 tag 的长会话不会触发 show。
   {
     localStorage.removeItem('dshPharos.config');
-    const r = m1Reload({ bag: { pageFocus: false, nativeTagLimit: 64 }, notificationStyle: 'web' });
+    const focusRequests = [];
+    const r = m1Reload({ bag: { pageFocus: false, nativeTagLimit: 64 }, notificationStyle: 'web', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Electron/44.0.0', fetch: async (url, opts) => {
+      if (url === '/pharos/api/desktop-focus') { focusRequests.push(opts); return { ok: true, status: 200 }; }
+      return global.fetch(url, opts);
+    } });
     const sid = 'session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     const ui = m1Apply(r, { extraRows: { [sid]: { id: sid, displayTitle: 'Windows 长 ID 会话' } } });
     const api = r.context.window.__dshPharos;
@@ -1124,12 +1134,18 @@ if (!m1Ready) {
     await m1Wait(10);
     m1a(r.bag.nativeAttempts[0].shown && !r.bag.nativeAttempts[1].shown,
       'Windows 模型复现短 ID 成功、真实长度 ID 构造成功但不能显示');
+    let expiredControlClick = false;
+    const expiredControl = r.bag.notifications[0];
+    expiredControl.n.onclick = () => { expiredControlClick = true; };
+    expiredControl.fire('timeout'); expiredControl.fire('click');
+    m1a(!expiredControlClick, 'Windows 默认横幅超时后通知中心点击失去回调');
     for (const kind of ['done', 'error', 'interrupted', 'limit', 'job', 'remote', 'workflow']) {
       es.dispatch(m1Frame(kind, sid, '', { dedupeKey: `native-${kind}` }), 'pharos');
       await m1Wait(10);
       const last = api.debug().recentNotifications.at(-1);
       m1a(last?.kind === kind && last.result === 'shown', `Windows 长会话 ${kind} 收到 show`);
       const beforeClick = r.bag.opened.length;
+      r.bag.notifications.at(-1).fire('timeout');
       r.bag.notifications.at(-1).fire('click');
       m1a(r.bag.opened.length === beforeClick + 1 && r.bag.opened.at(-1)[0] === 'uiWorkspace.openSession' && r.bag.opened.at(-1)[1] === sid,
         `Windows 长会话 ${kind} 点击通过 Web onclick 切到目标会话`);
@@ -1139,9 +1155,32 @@ if (!m1Ready) {
     const attention = api.debug().recentNotifications.at(-1);
     m1a(attention?.kind === 'attention' && attention.result === 'shown', 'Windows 长会话需要操作收到 show');
     const beforeAttentionClick = r.bag.opened.length;
+    r.bag.notifications.at(-1).fire('timeout');
     r.bag.notifications.at(-1).fire('click');
     m1a(r.bag.opened.length === beforeAttentionClick + 1 && r.bag.opened.at(-1)[0] === 'uiWorkspace.openSession' && r.bag.opened.at(-1)[1] === sid,
       'Windows 长会话需要操作点击通过 Web onclick 切到目标会话');
+    m1a(focusRequests.length === 8 && focusRequests.every(o => o.method === 'POST' && o.headers['x-pharos-desktop'] === '1'),
+      'Windows 每次点击请求宿主恢复窗口，仅投递通知不恢复');
+    api.setConfig({ autoFocus: false });
+    es.dispatch(m1Frame('remote', sid, '', { dedupeKey: 'no-focus' }), 'pharos'); await m1Wait(10);
+    const beforeNoFocus = r.bag.opened.length;
+    r.bag.notifications.at(-1).fire('click');
+    m1a(focusRequests.length === 8 && r.bag.opened.length === beforeNoFocus + 1, '关闭自动聚焦仍切会话但不请求窗口恢复');
+  }
+
+  // 仅 Windows Electron 改为需用户处理的通知；普通浏览器与其他系统仍按原时机消失。
+  for (const userAgent of ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/152.0.0.0', 'Mozilla/5.0 (Macintosh) Electron/44.0.0']) {
+    localStorage.removeItem('dshPharos.config');
+    const focusRequests = [];
+    const r = m1Reload({ notificationStyle: 'web', userAgent, fetch: async (url, opts) => {
+      if (url === '/pharos/api/desktop-focus') focusRequests.push(opts);
+      return global.fetch(url, opts);
+    } }); m1Apply(r);
+    r.ES.instances.at(-1).dispatch(m1Frame('remote', 'platform-control', ''), 'pharos');
+    await m1Wait(10);
+    m1a(!r.bag.notifications.at(-1).n.opts.requireInteraction, '非 Windows Electron 不延长通知显示时间');
+    r.bag.notifications.at(-1).fire('click');
+    m1a(focusRequests.length === 0, '非 Windows Electron 不调用窗口恢复接口');
   }
 
   // ---- M1-R: 设置页布局契约锁（v0.6.1 真机截图暴露：标签被 select 挤成竖排）----
