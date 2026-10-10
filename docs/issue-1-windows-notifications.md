@@ -107,7 +107,7 @@ macOS 行为由平台分支回归保护，本次未在 macOS 实机重测。退�
 
 对本机已运行的 `/pharos/api/desktop-focus` 发出不会启动恢复动作的无效请求，实际响应为：GET 405、缺 `x-pharos-desktop` 403、跨站 Origin 403、text/plain 400，与自动化预期一致。此检查没有修改配置或启动协议。
 
-另准备后台应用场景 A：关闭设置，切到 strat 并重新观察标题，再将 Sourcetree 切到前台，DSH 保持未最小化。发送 remote 帧 `b19b4fe5-5d77-45f2-a7ac-5b457c689db2`，正文含“Windows 后台应用验证 A”；原生历史中 Tag 为 `n#dsh-app://app#7CFAC467E02A13902C573B66ECDC2790`，scenario 为 reminder。当前等待用户点击反馈，不能据通知存在判定前台恢复通过。关闭自动聚焦后的实机场景尚未开始。
+后台应用场景 A 已通过：关闭设置，切到 strat 并重新观察标题，再将 Sourcetree 切到前台，DSH 保持未最小化。发送 remote 帧 `b19b4fe5-5d77-45f2-a7ac-5b457c689db2`，正文含“Windows 后台应用验证 A”；原生历史中 Tag 为 `n#dsh-app://app#7CFAC467E02A13902C573B66ECDC2790`，scenario 为 reminder。用户点击后明确反馈“是从 Sourcetree 自动返回 DSH 并切到验收会话，验收通过”；随后窗口清单与主视图也确认是目标会话。该场景的前台恢复结论依据用户实际点击反馈，通知历史只用于确认原生条目。
 
 ## 再次排查
 
