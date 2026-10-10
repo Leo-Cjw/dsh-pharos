@@ -2,6 +2,18 @@
 
 本文件记录 dsh-pharos 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### 修复
+
+- Windows 系统通知不再传入包含会话 ID 的 `tag`。Electron 把 Chromium 的 `n#origin#tag` 作为 Windows 原生 tag；真实会话 ID 会令它超过 64 字符上限，出现只有插件声音、没有系统通知的情况（[issue #1](https://github.com/Leo-Cjw/dsh-pharos/issues/1)）。去重保留在事件策略层。
+- `completionUnread` 完成信号与 running/SSE 共用完成时机、子代理过滤和节流，防止绕过 off/hidden 策略或重复提醒。隐藏页面同时检查 visibilityState。
+- 接住 Web Notification 的异步 `error`，只补一次页内提示，不重复响铃；通知诊断区分请求、显示回调、失败和静默。设置页明确测试按钮只验证页内提示。
+- 修正 host 测试的 Windows file URL 转换和根路径预期，使完整测试可以在 Windows 运行。
+- Windows Electron 通知启用 `requireInteraction`，避免横幅超时后的 Web close 移除点击监听；点击通过本机 host 打开固定 `dsh://open`，由 DSH 恢复最小化窗口。macOS 与普通浏览器不启用这两个分支。新增恢复接口的来源校验、平台分支及开关回归。
+
+验证范围与剩余限制见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。
+
 ## [0.6.3] — 2026-10-09
 
 patch 版：修「点击系统通知只把 DSH 拉到前台、不跳到该会话页」。此前该能力从 v0.3 起就从未真正生效。

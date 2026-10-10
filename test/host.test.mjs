@@ -21,7 +21,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { EventEmitter } from 'node:events';
+import { restoreWindowsDesktop } from '../lib/host/desktop.js';
 
 let failed = 0;
 let passed = 0;
@@ -32,7 +34,7 @@ const assert = (cond, msg) => {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- host 模块加载（探测形态；契约 §1 以交付为准） ----------
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const importFresh = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
 let hostMod = null;
@@ -606,7 +608,7 @@ if (store) {
   {
     const ctxHome = { get: () => ({ name: 'desktop' }) };
     const p = store.pharosFilePath(ctxHome, { DSH_HOME: '/x/home' });
-    assert(p === path.join('/x/home', 'profiles', 'desktop', 'pharos.json'), 'DSH_HOME+profiles/name 解析');
+    assert(p === path.join(path.resolve('/x/home'), 'profiles', 'desktop', 'pharos.json'), 'DSH_HOME+profiles/name 解析');
   }
   {
     const ctxDir = { get: () => ({ name: 'desktop', dir: '/custom/dir' }) };
@@ -615,7 +617,7 @@ if (store) {
   }
   {
     const p = store.pharosFilePath({ get: () => null }, { DSH_HOME: '/x/home' });
-    assert(p === path.join('/x/home', 'pharos.json'), '无 profileContext 回退 <home>/pharos.json');
+    assert(p === path.join(path.resolve('/x/home'), 'pharos.json'), '无 profileContext 回退 <home>/pharos.json');
   }
   {
     const merged = store.deepMerge(store.DEFAULT_CONFIG, { quietHours: { start: '20:00' } });
@@ -1368,6 +1370,46 @@ if (!stats) {
     'm1Ready 为假且源码已含实现时硬失败（M1 组不再静默 skip）');
   assert(/hasImpl \? '含（→ 是加载失败）'/.test(smokeSrc),
     '门禁区分「加载失败」与「尚未实现」两种豁免，避免误伤早期版本');
+}
+
+// Windows 窗口恢复：固定协议、独立平台分支、失败回传；测试不启动应用。
+{
+  const launches = [];
+  const launch = (...args) => {
+    launches.push(args); const child = new EventEmitter(); child.unref = () => {};
+    queueMicrotask(() => child.emit('spawn')); return child;
+  };
+  assert(await restoreWindowsDesktop({ platform: 'darwin', launch }) === false && launches.length === 0, 'macOS 不启动 Windows 恢复入口');
+  assert(await restoreWindowsDesktop({ platform: 'win32', launch, systemRoot: 'C:\\Windows' }) === true, 'Windows 恢复请求可提交');
+  assert(launches[0][0] === 'C:\\Windows\\explorer.exe' && launches[0][1].length === 1 && launches[0][1][0] === 'dsh://open' && launches[0][2].shell === false && launches[0][2].windowsHide === true,
+    '窗口恢复只启动固定 DSH 协议，无 shell 或用户命令');
+  let launchFailed = false;
+  try { await restoreWindowsDesktop({ platform: 'win32', launch: () => {
+    const child = new EventEmitter(); queueMicrotask(() => child.emit('error', new Error('launch failed'))); return child;
+  } }); } catch { launchFailed = true; }
+  assert(launchFailed, 'Windows 启动失败不会冒充恢复成功');
+
+  const ctx = makeStubCtx(); let requests = 0; let throwFocus = false;
+  const cfg = { enabled: true, autoFocus: true };
+  const ds = routes.registerRoutes({ webServer: ctx.webServer, store: { getConfig: () => cfg }, bus: { subscribe: () => () => {} },
+    restoreDesktop: async () => { requests++; if (throwFocus) throw Error('launch failed'); return true; } });
+  const focus = async (extra = {}) => {
+    const c = callApi(ctx, '/pharos/api/desktop-focus', { method: 'POST', headers: { 'content-type': 'application/json', 'x-pharos-desktop': '1' }, body: {}, ...extra });
+    await c.done; return c.res;
+  };
+  assert((await focus()).state.status === 200 && requests === 1, '桌面代理无 Origin 时可请求恢复');
+  assert((await focus({ remoteAddress: '10.0.0.1' })).state.status === 403 && requests === 1, '非本机请求不能恢复窗口');
+  assert((await focus({ headers: { 'content-type': 'application/json' } })).state.status === 403, '缺桌面自定义头拒绝');
+  assert((await focus({ headers: { 'content-type': 'application/json', 'x-pharos-desktop': '1', origin: 'https://evil.example' } })).state.status === 403, '跨站 Origin 拒绝');
+  assert((await focus({ method: 'GET' })).state.status === 405, '窗口恢复只接受 POST');
+  assert((await focus({ headers: { 'content-type': 'text/plain', 'x-pharos-desktop': '1' } })).state.status === 400, '窗口恢复不接受简单表单类型');
+  cfg.autoFocus = false;
+  assert(JSON.parse((await focus()).body).requested === false && requests === 1, '关闭自动聚焦后宿主不启动协议');
+  cfg.autoFocus = true; cfg.enabled = false;
+  assert(JSON.parse((await focus()).body).requested === false && requests === 1, '关闭提醒后宿主不启动协议');
+  cfg.enabled = true; throwFocus = true;
+  assert((await focus()).state.status === 500, '协议启动异常回传失败状态');
+  ds();
 }
 
 console.log(failed === 0
