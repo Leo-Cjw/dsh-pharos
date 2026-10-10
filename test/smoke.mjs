@@ -1113,11 +1113,11 @@ if (!m1Ready) {
   {
     localStorage.removeItem('dshPharos.config');
     const r = m1Reload({ bag: { pageFocus: false, nativeTagLimit: 64 }, notificationStyle: 'web' });
-    const ui = m1Apply(r);
+    const sid = 'session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const ui = m1Apply(r, { extraRows: { [sid]: { id: sid, displayTitle: 'Windows 长 ID 会话' } } });
     const api = r.context.window.__dshPharos;
     const es = r.ES.instances.at(-1);
     api.setConfig({ workflowEvents: true });
-    const sid = 'session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     // 校准模型：旧实现的短 ID 可显示，长 ID 不显示。
     new r.context.Notification('short control', { tag: 'dsh-pharos::remote' });
     new r.context.Notification('long control', { tag: `dsh-pharos:${sid}:done` });
@@ -1129,11 +1129,19 @@ if (!m1Ready) {
       await m1Wait(10);
       const last = api.debug().recentNotifications.at(-1);
       m1a(last?.kind === kind && last.result === 'shown', `Windows 长会话 ${kind} 收到 show`);
+      const beforeClick = r.bag.opened.length;
+      r.bag.notifications.at(-1).fire('click');
+      m1a(r.bag.opened.length === beforeClick + 1 && r.bag.opened.at(-1)[0] === 'uiWorkspace.openSession' && r.bag.opened.at(-1)[1] === sid,
+        `Windows 长会话 ${kind} 点击通过 Web onclick 切到目标会话`);
     }
     ui.status.set(sid, { running: false, pendingInteraction: { kind: 'question', key: 'native-question' } }); ui.tick();
     await m1Wait(10);
     const attention = api.debug().recentNotifications.at(-1);
     m1a(attention?.kind === 'attention' && attention.result === 'shown', 'Windows 长会话需要操作收到 show');
+    const beforeAttentionClick = r.bag.opened.length;
+    r.bag.notifications.at(-1).fire('click');
+    m1a(r.bag.opened.length === beforeAttentionClick + 1 && r.bag.opened.at(-1)[0] === 'uiWorkspace.openSession' && r.bag.opened.at(-1)[1] === sid,
+      'Windows 长会话需要操作点击通过 Web onclick 切到目标会话');
   }
 
   // ---- M1-R: 设置页布局契约锁（v0.6.1 真机截图暴露：标签被 select 挤成竖排）----

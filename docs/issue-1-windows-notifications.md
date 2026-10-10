@@ -65,6 +65,14 @@ new Notification(title, { body, tag: `dsh-pharos:${sessionId}:${kind}`, silent: 
 
 这次只更新 Git 开发分支，没有重新部署本机 DSH 插件或发布版本；上一节的实机结果属于合并前候选，合并后的点击跳转未另做实机验收。
 
+## Windows 点击跳转检查（2026-10-10）
+
+合并后再次核对本机安装文件：仍是上述 `B04E1688…` 的 0.6.2 修复候选，尚未加载合并版。安装文件中 `onclick` 只对 attention 调用 openSession，且 openSession 仍使用 `binding(id)?.session.open()`；因此完成、出错等通知没有跳转调用，attention 也没有真正切换主视图的入口。这是对安装源码的确认，不是实机点击结果。
+
+开发分支已包含 main 的导航修复。补充 Windows 长 ID + Web Notifications 回归，把同一模型中的 done/error/interrupted/limit/job/remote/workflow/attention 通知从显示检查延伸到点击检查：每种都必须调用 `uiWorkspace.openSession`，并传入原始完整会话 ID。`npm test` 通过：浏览器 M1 288 项、host 317 项，以及原有 v0.3 断言。
+
+实机点击验收尚未完成：computer-use 找到 `strat — DeepSeek Harness` 窗口，但重新获取窗口后两次激活均返回 `failed to activate captured window`，截图全黑。没有继续点击，也没有替换安装文件或重启 DSH。待窗口可操作后，需加载合并版，从另一个会话点击 Windows 通知，再核对主视图及 navLog；目前不能宣称 Windows 点击跳转已实机通过。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：
