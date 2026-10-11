@@ -48,7 +48,7 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 
 ![Windows Webhook 消息格式：禁用示例中的简洁、详细、自定义三档](assets/screenshot-9-webhook-formats.png)
 
-> 前两张保留为 macOS 历史真实通知示例；其余截图于 2026-10-11 在 Windows 本机拍摄，界面标注 v0.6.3，加载当前分支的 Windows 修复候选，尚非新版本发布。Windows 图片仅裁掉空白和无关背景，保留真实文字与控件。设置页截图展示当轮统计、基本设置、三档提醒时机、免打扰、过滤、Webhook、高级、测试与 Debug。Webhook 格式图使用已禁用的临时示例和 `example.invalid` 地址，拍摄后已恢复空列表，没有配置真实密钥。
+> 前两张保留为 macOS 历史真实通知示例；其余截图于 2026-10-11 在 Windows 本机拍摄，界面标注 v0.6.3，原图入库于 `c334fb4`、裁切于 `2938c5d`，尚非新版本发布。后续工作流容量修复新增的“最近 3 条”设置提示尚未重拍。Windows 图片仅裁掉空白和无关背景，保留真实文字与控件。设置页截图展示当轮统计、基本设置、三档提醒时机、免打扰、过滤、Webhook、高级、测试与 Debug。Webhook 格式图使用已禁用的临时示例和 `example.invalid` 地址，拍摄后已恢复空列表，没有配置真实密钥。
 
 工作流图来自 macOS 的真实多 agent 工作流（3 个并发 agent）通知栈，正文带工作流名 `multi-agent-audit`；最上方「任务已完成」是主会话整体完成。它不代表 Windows 工作流实机验收。Windows 的通知显示和点击结果见 [验收记录](docs/issue-1-windows-notifications.md)；这里尚未附 Windows 系统通知横幅截图。截图维护清单见 [截图指南](docs/screenshot-guide.md)。
 
