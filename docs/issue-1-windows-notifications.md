@@ -166,7 +166,9 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 第五轮 `pharos-workflow-candidate5` 首次请求因上游 `fetch failed` 在工作流启动前失败，SSE 没有工作流事件；重试一次后真实工作流完成。独立 SSE 收到 9 个提醒和 1 个静默日志，Windows 原生历史自动清理后只剩 3 条：五验乙结束、五验甲结束、汇总阶段，没有手工删除本轮通知。原生 tag 为 `n#dsh-app://app#pharos-wf-mv3vm9lc-x55rx8i5-6/7/8`，各为 43 字符；此结果验证自动容量，不单独证明点击。
 
-本轮指定点击“五验甲结束”，真实 childId 为 `01271189-87a6-433e-a629-f06ecd125371`，对应序号 7。点击前 Debug 确认当前为 strat（`session-52766c78-2c8b-4911-9f78-d20217e418ad`）、navLog=[]、上述三个唯一 tag 与各自会话对应，workflowHistoryCleanup 为 pending=0、running=false、failures=0、error=null，autoFocus=true；随后关闭设置，复查 strat，最小化 DSH，并把 Sourcetree 放到前台。电脑工具仍不能操作通知中心，因此请用户点击此确切通知，点击后证据尚待取得。
+本轮指定点击“五验甲结束”，真实 childId 为 `01271189-87a6-433e-a629-f06ecd125371`，对应序号 7。点击前 Debug 确认当前为 strat（`session-52766c78-2c8b-4911-9f78-d20217e418ad`）、navLog=[]、上述三个唯一 tag 与各自会话对应，workflowHistoryCleanup 为 pending=0、running=false、failures=0、error=null，autoFocus=true；随后关闭设置，复查 strat，最小化 DSH，并把 Sourcetree 放到前台。电脑工具仍不能操作通知中心，因此请用户点击此确切通知。
+
+用户反馈 DSH 未恢复前台。这次点击验收未通过：手动激活前只读窗口标题仍为 strat，历史剩下五验甲、五验乙，消失的是汇总阶段。无法确定这个差异的原因，也不能推断用户点了哪一条或证明目标监听已经失效。随后手动打开读取 Debug：currentSessionId 仍为 strat、navLog=[]、autoFocus=true，三个唯一 tag 的槽位仍存在，清理状态 pending=0、running=false、failures=0、error=null。没有进入插件导航或恢复请求的证据。日志保存于 `%TEMP%/pharos-screenshot-raw-cf214de/candidate5-after-click.txt`。保留同一进程，再次关闭设置、核对 strat、最小化并切到 Sourcetree；请用户在只剩两条子会话通知的情况下展开通知组，点击五验甲的正文区域，避免组标题或关闭按钮，继续核验确切条目的激活。当前仍不能宣布工作流点击通过。
 
 第五轮原始记录为 `%TEMP%/pharos-workflow-candidate5-sse.jsonl`、`pharos-workflow-candidate5-history.json`、`pharos-screenshot-raw-cf214de/candidate5-before-click.txt`。源文件和安装文件对齐：client SHA-256 为 `D7A8BF3E3B105EB3657CEF5E14DC77D573ED0AD3E58CEA0F37A705AD603F7209`；notification-history SHA-256 为 `0ABB842B4471646577F3CD638AFF8F9D4EF6CC259A40C3FAB24DBEC147D8463C`。服务端测试配置已恢复并读回 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true；为保留本轮点击监听，客户端暂未重启，最终恢复仍需验收后正常重启并读回。
 
