@@ -170,6 +170,20 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 用户反馈 DSH 未恢复前台。这次点击验收未通过：手动激活前只读窗口标题仍为 strat，历史剩下五验甲、五验乙，消失的是汇总阶段。无法确定这个差异的原因，也不能推断用户点了哪一条或证明目标监听已经失效。随后手动打开读取 Debug：currentSessionId 仍为 strat、navLog=[]、autoFocus=true，三个唯一 tag 的槽位仍存在，清理状态 pending=0、running=false、failures=0、error=null。没有进入插件导航或恢复请求的证据。日志保存于 `%TEMP%/pharos-screenshot-raw-cf214de/candidate5-after-click.txt`。保留同一进程，再次关闭设置、核对 strat、最小化并切到 Sourcetree；请用户在只剩两条子会话通知的情况下展开通知组，点击五验甲的正文区域，避免组标题或关闭按钮，继续核验确切条目的激活。当前仍不能宣布工作流点击通过。
 
+第二次用户反馈仍未恢复前台，手动激活前标题仍为 strat，这轮全部通知已不在原生历史。随后 Debug 仍为 navLog=[]、当前 strat，清理无错误，三个槽位仍存在，记录于 `%TEMP%/pharos-screenshot-raw-cf214de/candidate5-after-click-recheck.txt`。不能继续要求点击已不存在的条目。
+
+### 系统通知模式与立即关闭诊断（2026-10-11）
+
+不改插件源码，正常退出后临时使用 Electron 自带 `ELECTRON_DEBUG_NOTIFICATIONS`、`--enable-logging=file`、`--log-file` 启动诊断进程，日志留在本机 `%TEMP%/pharos-candidate6-electron-native.log`；环境变量只传给本次子进程，未写入持久系统设置。首次启动窗口尚未暴露时只复查同一进程，没有重复启动；待窗口可操作后继续。
+
+第六轮 `pharos-workflow-candidate6` 在 DSH 前台发出，三次阶段事件在子代理之前，最后三条均为真实子会话结束。SSE 收到 9 条提醒及 1 条静默日志，原生历史为 3 条。原生日志显示最后三条创建后约 20–30 毫秒就收到 `Notification dismissed`，当时尚未人工点击；没有插件 `Hiding notification` 调用日志。这比“客户端 shown、历史存在”更强：当前环境里 reminder 仍会立即关闭。日志没有输出具体 dismissal reason 或每次 dismissed 的 ID，不能据此断言全部原生原因。
+
+第七轮 `pharos-workflow-candidate7` 脚本先等待 30 秒，期间工具明确切到 strat、最小化 DSH、将 Sourcetree 置于前台，再观察后台通知。仍收到 9 条提醒和 1 条静默日志，历史自动只保留最近 3 条子会话结束；原生日志再次记录立即 dismissed。随后普通完成提醒也立即 dismissed，说明本次现象不只出现在工作流容量路径。第七轮未再要求人工点击已知收到 close 的通知。SSE 证据为 `%TEMP%/pharos-workflow-candidate6-sse.jsonl`、`pharos-workflow-candidate7-sse.jsonl`。
+
+只读 `CreateToastNotifier(...).Setting` 返回 Enabled；随后 `ToastNotificationManager.GetDefault().NotificationMode` 返回 **AlarmsOnly**。[微软 NotificationMode 文档](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationmanagerforuser.notificationmode?view=winrt-26100) 将它定义为当前用户通知显示模式，[枚举文档](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationmode?view=winrt-26100) 明确该模式抑制非闹钟通知。应用允许投递与系统仅允许闹钟是不同状态，不能用 Enabled 排除系统抑制。此 API 在较旧 Windows 上可能不可用。
+
+系统模式与立即关闭已同时观测，但未完成模式切换对照，不能把 AlarmsOnly 宣称为唯一已证实原因，也不能声称已解决该模式下的通知中心点击。已请用户暂时手动关闭请勿打扰/专注模式，待只读确认模式后再运行正常模式对照；代理没有自动改动系统通知设置。当前候选仍待点击收口。
+
 第五轮原始记录为 `%TEMP%/pharos-workflow-candidate5-sse.jsonl`、`pharos-workflow-candidate5-history.json`、`pharos-screenshot-raw-cf214de/candidate5-before-click.txt`。源文件和安装文件对齐：client SHA-256 为 `D7A8BF3E3B105EB3657CEF5E14DC77D573ED0AD3E58CEA0F37A705AD603F7209`；notification-history SHA-256 为 `0ABB842B4471646577F3CD638AFF8F9D4EF6CC259A40C3FAB24DBEC147D8463C`。服务端测试配置已恢复并读回 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true；为保留本轮点击监听，客户端暂未重启，最终恢复仍需验收后正常重启并读回。
 
 新实现完整 `npm test` 通过：浏览器 M1 327 项、host 353 项及原有 v0.3 断言。host 数量包含 Windows 上实际运行的 PowerShell 多 tag 解析测试。模型新增同 ID 旧 close 清除新监听的场景，覆盖 Web/EventEmitter 最近三个通知各自点击、异步清理失败重试、清理中迟到 show 的修订号、卸载停止请求，以及严格来源与 tag 校验、固定程序/stdin、子进程失败与超时。独立副本改回固定三个 tag 后产生 10 项 M1 失败，包含两种 API 的点击导航断言；该反向检查不能替代实机点击。`npm pack --dry-run` 返回 26 个文件，新增 `lib/host/notification-history.js` 已入包。版本仍为 0.6.3，未发布新版本，macOS 未实机重测。
