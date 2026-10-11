@@ -30,22 +30,27 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 
 ## 效果示意
 
-![系统通知横幅：回复完成，点击回到 DSH 查看](assets/screenshot-1-notification.png)
+![macOS 系统通知：回复完成](assets/screenshot-1-notification.png)
 
-![工作流提醒：阶段推进与多 agent 启动/结束通知（v0.6 新增，默认关闭）](assets/screenshot-2-workflow-notifications.png)
+![macOS 工作流通知：阶段推进与多 agent 结束提醒](assets/screenshot-2-workflow-notifications.png)
 
-![插件详情页：灯塔图标、v0.6.0 版本徽章与完整说明](assets/screenshot-3-overview.png)
+![Windows 插件详情：灯塔图标、v0.6.3 版本与当前说明](assets/screenshot-3-overview.png)
 
-![消息通知配置（一）：设置入口、标题行与基本设置](assets/screenshot-4-settings-basic.png)
+![Windows 基本设置：当轮统计、自动保存、自动聚焦与通知保留说明](assets/screenshot-4-settings-basic.png)
 
-![消息通知配置（二）：提醒时机与当轮统计](assets/screenshot-5-settings-timing.png)
+![Windows 提醒时机：关闭、仅页面隐藏时提醒、始终提醒三档与免打扰](assets/screenshot-5-settings-timing.png)
 
-![消息通知配置（三）：免打扰时段、过滤（含工作流开关）、Webhook 推送与高级](assets/screenshot-6-settings-filter-webhook.png)
+![Windows 过滤配置：免打扰、子代理与工作流开关、Webhook 自动保存](assets/screenshot-6-settings-filter-webhook.png)
 
-![已安装插件列表：灯塔图标与社区插件图标风格一致（浅色）](assets/screenshot-7-plugins-light.png)
+![Windows 已安装插件列表：灯塔图标与当前描述](assets/screenshot-7-plugins-windows.png)
 
-> 图为 macOS 本机真实截图（v0.6.0）：系统通知横幅来自实际「回复完成」事件；设置页为顶级「消息通知」分区，左侧导航带灯塔图标，页面顶部标注 `dsh-pharos` 与版本号；三张设置页图完整覆盖全部 9 张配置卡片，其中「过滤」卡可见 v0.6 新增的**工作流提醒**与**工作流日志**两个开关（默认关，开启需重启 DSH）。
-工作流提醒图为真实多 agent 工作流（3 个并发 agent）的通知栈：标题统一为「工作流进展」、正文带工作流名 `multi-agent-audit`；最下方那条「任务已完成」是**主会话**整体完成（含耗时/tokens/缓存命中率），子代理自己的完成通知按 `skipSubagents` 过滤、不重复打扰。
+![Windows 测试与 Debug：测试按钮用途、日志入口及自动保存状态](assets/screenshot-8-settings-debug.png)
+
+![Windows Webhook 消息格式：禁用示例中的简洁、详细、自定义三档](assets/screenshot-9-webhook-formats.png)
+
+> 前两张保留为 macOS 历史真实通知示例；其余截图于 2026-10-11 在 Windows 本机拍摄，界面标注 v0.6.3，加载当前分支的 Windows 修复候选，尚非新版本发布。设置页截图展示当轮统计、基本设置、三档提醒时机、免打扰、过滤、Webhook、高级、测试与 Debug。Webhook 格式图使用已禁用的临时示例和 `example.invalid` 地址，拍摄后已恢复空列表，没有配置真实密钥。
+
+工作流图来自 macOS 的真实多 agent 工作流（3 个并发 agent）通知栈，正文带工作流名 `multi-agent-audit`；最上方「任务已完成」是主会话整体完成。它不代表 Windows 工作流实机验收。Windows 的通知显示和点击结果见 [验收记录](docs/issue-1-windows-notifications.md)；这里尚未附 Windows 系统通知横幅截图。截图维护清单见 [截图指南](docs/screenshot-guide.md)。
 
 ## 配置
 

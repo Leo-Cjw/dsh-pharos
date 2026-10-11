@@ -212,4 +212,4 @@ order 实测占用：general `0` / models `10` / plugins `15` / agent-presets `2
 
 **版本**：0.5.0 → **0.5.1**。用户可见行为变更（设置入口从「内置插件」分区内标签页升为顶级分区 + 新增灯塔图标），无新功能，故走 patch 位；`0.6.0` 留给 M2.5（`docs/m2.5-plan.md`）。`package.json` 的 description 同步改为「…a settings page in the Settings sidebar.」（原为 "a settings tab"，与新位置不符）。
 
-**待办**：README 截图 `screenshot-3/4/5-settings-*.png` 与 `screenshot-2-overview.png` 仍显示旧位置与宿主通用插画，需在重启 DSH 后重拍（拍图须先关系统专注模式）。
+**历史待办（已更新）**：旧位置与通用插画截图已被后续截图替换；当前文件名、平台与剩余 Windows 通知横幅拍摄项见 [截图维护清单](screenshot-guide.md)。不要再按本段旧文件名重拍，也不要为拍图自动修改系统专注模式。
