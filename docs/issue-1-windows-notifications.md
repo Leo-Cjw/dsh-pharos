@@ -184,6 +184,8 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 系统模式与立即关闭已同时观测，但未完成模式切换对照，不能把 AlarmsOnly 宣称为唯一已证实原因，也不能声称已解决该模式下的通知中心点击。已请用户暂时手动关闭请勿打扰/专注模式，待只读确认模式后再运行正常模式对照；代理没有自动改动系统通知设置。当前候选仍待点击收口。
 
+等待系统模式对照期间，已结束临时诊断启动，恢复服务端配置并正常退出、使用原应用启动入口重新打开。客户端 Debug 实际读回 configSource=server、sse=open、workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true、workflowNotificationSlots=[]，当前仍为 strat；服务端此前同样读回上述配置。诊断启动参数及环境变量未延续到这次启动，关闭设置后保留可使用的 DSH。恢复证据为 `%TEMP%/pharos-screenshot-raw-cf214de/candidate7-client-config-restored.txt`。
+
 第五轮原始记录为 `%TEMP%/pharos-workflow-candidate5-sse.jsonl`、`pharos-workflow-candidate5-history.json`、`pharos-screenshot-raw-cf214de/candidate5-before-click.txt`。源文件和安装文件对齐：client SHA-256 为 `D7A8BF3E3B105EB3657CEF5E14DC77D573ED0AD3E58CEA0F37A705AD603F7209`；notification-history SHA-256 为 `0ABB842B4471646577F3CD638AFF8F9D4EF6CC259A40C3FAB24DBEC147D8463C`。服务端测试配置已恢复并读回 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true；为保留本轮点击监听，客户端暂未重启，最终恢复仍需验收后正常重启并读回。
 
 新实现完整 `npm test` 通过：浏览器 M1 327 项、host 353 项及原有 v0.3 断言。host 数量包含 Windows 上实际运行的 PowerShell 多 tag 解析测试。模型新增同 ID 旧 close 清除新监听的场景，覆盖 Web/EventEmitter 最近三个通知各自点击、异步清理失败重试、清理中迟到 show 的修订号、卸载停止请求，以及严格来源与 tag 校验、固定程序/stdin、子进程失败与超时。独立副本改回固定三个 tag 后产生 10 项 M1 失败，包含两种 API 的点击导航断言；该反向检查不能替代实机点击。`npm pack --dry-run` 返回 26 个文件，新增 `lib/host/notification-history.js` 已入包。版本仍为 0.6.3，未发布新版本，macOS 未实机重测。
