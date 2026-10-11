@@ -11,6 +11,8 @@
 - 接住 Web Notification 的异步 `error`，只补一次页内提示，不重复响铃；通知诊断区分请求、显示回调、失败和静默。设置页明确测试按钮只验证页内提示。
 - 修正 host 测试的 Windows file URL 转换和根路径预期，使完整测试可以在 Windows 运行。
 - Windows Electron 通知启用 `requireInteraction`，避免横幅超时后的 Web close 移除点击监听；点击通过本机 host 打开固定 `dsh://open`，由 DSH 恢复最小化窗口。macOS 与普通浏览器不启用这两个分支。新增恢复接口的来源校验、平台分支及开关回归。
+- Windows 工作流通知轮换使用 3 个固定短 tag，由系统替换旧进展，限制通知中心堆积；全部 SSE/Webhook 事件仍完整投递，其他通知与平台不使用这些 tag。保留 requireInteraction 和原始会话点击跳转。
+- 控制台 API 版本复用设置页的版本来源，与包版本一致；补齐完成节流抑制不延长窗口、诊断记录及窗口恢复子进程 `unref()` 的回归测试。
 
 验证范围与剩余限制见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。
 

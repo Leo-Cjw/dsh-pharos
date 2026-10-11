@@ -1374,20 +1374,25 @@ if (!stats) {
 
 // Windows 窗口恢复：固定协议、独立平台分支、失败回传；测试不启动应用。
 {
-  const launches = [];
+  const launches = []; let unrefCalls = 0;
   const launch = (...args) => {
-    launches.push(args); const child = new EventEmitter(); child.unref = () => {};
+    launches.push(args); const child = new EventEmitter(); child.unref = () => { unrefCalls++; };
     queueMicrotask(() => child.emit('spawn')); return child;
   };
   assert(await restoreWindowsDesktop({ platform: 'darwin', launch }) === false && launches.length === 0, 'macOS 不启动 Windows 恢复入口');
-  assert(await restoreWindowsDesktop({ platform: 'win32', launch, systemRoot: 'C:\\Windows' }) === true, 'Windows 恢复请求可提交');
+  const restoreRequest = restoreWindowsDesktop({ platform: 'win32', launch, systemRoot: 'C:\\Windows' });
+  assert(unrefCalls === 0, '收到 spawn 之前不提前释放子进程引用');
+  assert(await restoreRequest === true, 'Windows 恢复请求可提交');
+  assert(unrefCalls === 1, '成功 spawn 后释放子进程引用，避免阻止宿主退出');
   assert(launches[0][0] === 'C:\\Windows\\explorer.exe' && launches[0][1].length === 1 && launches[0][1][0] === 'dsh://open' && launches[0][2].shell === false && launches[0][2].windowsHide === true,
     '窗口恢复只启动固定 DSH 协议，无 shell 或用户命令');
   let launchFailed = false;
   try { await restoreWindowsDesktop({ platform: 'win32', launch: () => {
-    const child = new EventEmitter(); queueMicrotask(() => child.emit('error', new Error('launch failed'))); return child;
+    const child = new EventEmitter(); child.unref = () => { unrefCalls++; };
+    queueMicrotask(() => child.emit('error', new Error('launch failed'))); return child;
   } }); } catch { launchFailed = true; }
   assert(launchFailed, 'Windows 启动失败不会冒充恢复成功');
+  assert(unrefCalls === 1, '启动失败路径不调用 unref');
 
   const ctx = makeStubCtx(); let requests = 0; let throwFocus = false;
   const cfg = { enabled: true, autoFocus: true };

@@ -60,6 +60,14 @@
 - 同一工作流在 **3 秒内两次进入同名阶段** → 第二次不重复提醒。
 - 同一序号重复上报 → 不重复提醒。
 
+### 1.5 Windows 通知历史容量
+
+Windows Electron 的工作流通知轮换使用 `pharos-wf-0`、`pharos-wf-1`、`pharos-wf-2` 三个固定短 tag，由系统替换同 tag 的旧进展。tag 不含会话 ID；本机原生标识为 27 字符，低于 64 字符上限。所有工作流共用这三个槽位，不按工作流名称分组。保留 `requireInteraction` 和当前通知对应的原始会话点击逻辑。
+
+全部 workflow 帧仍进入 SSE/调试队列，Webhook 仍逐事件发送；此规则不节流事件、不改变子会话 ID。完成、需要你操作、出错等其他通知不使用这些 tag。macOS 和普通浏览器不启用槽位规则。旧版本留下的随机 tag 历史不会被接管；已被替换的进展不再提供旧会话入口。重启后槽位继续复用，但重启前的点击监听无法延续。
+
+`__dshPharos.debug().workflowNotificationSlots` 显示每个 tag 最近请求的会话，`recentNotifications.workflowTag` 记录请求的槽位；它们不能证明条目仍在通知中心或点击监听有效，需另查原生历史并实际点击。构造失败不覆盖或消耗槽位；异步失败沿用页内兜底，系统是否已替换旧条目由宿主决定。Web close 可能仅隐藏横幅，不可靠地删除历史，因此不靠旧对象 close 或 show/close 回调计数控制容量。
+
 ---
 
 ## 二、`workflowLog` 是什么

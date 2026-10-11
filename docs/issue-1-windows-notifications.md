@@ -117,6 +117,27 @@ B 的用户反馈后，工具两次手动激活 DSH 均返回 `failed to activat
 
 B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HTTP 成功，不检查响应中的 requested，也不证明窗口已恢复。接口在 autoFocus=false 时可返回 200 和 requested=false。因此 B 的“不恢复前台”结论依据用户仍留在 Sourcetree 的反馈，不能扩展为“客户端没有发出任何聚焦请求”。本次未保存 B 点击时恢复接口的响应正文。
 
+## PR 评审收口：工作流容量与测试（2026-10-11）
+
+评审提出的堆积风险已在本机实测，而非仅按代码推演：临时启用 workflowEvents/workflowLog，以三个阶段、三个并发子代理运行 `pharos-workflow-baseline`，原生通知历史留下 9 条 reminder（3 phase、3 agent-start、3 agent-end），后续复查仍存在。未配置 Webhook，未向外部渠道发送验收事件。
+
+第一轮候选按 show 回调保留三条并调用旧对象 close，实机仍留下 8 条；客户端全部 9 条曾为 shown，但保留集合最终为空。这轮没有通过。Electron 的 [CloseNotificationWithId](https://github.com/electron/electron/blob/v44.0.0/shell/browser/notifications/notification_presenter.cc) 调用 Dismiss；Windows 的 [Dismiss](https://github.com/electron/electron/blob/v44.0.0/shell/browser/notifications/win/windows_toast_notification.cc) 使用 ToastNotifier.Hide。关闭回调与通知中心删除不能视为同一件事。因此撤回通过 close 回调维护历史容量的方案。
+
+第二轮改为 Windows workflow 专用的三个固定短 tag：`pharos-wf-0/1/2`，其他通知仍不传 tag。候选 client SHA-256 为 `E27F89D73FF07FCF5C6D7DF6590BD84E62CBF24AFD279BAA70EF463AB2467E59`，源文件与本机安装文件一致，普通退出重启加载。真实工作流 `pharos-workflow-candidate2` 完成后，独立 SSE 观察收到 9 个提醒事件和 1 个静默 log；WinRT 原生历史只剩 3 条，分别为短标甲结束、短标丙结束和汇总阶段。原生 tag 为 `n#dsh-app://app#pharos-wf-0/1/2`，均为 27 字符且 scenario 为 reminder。此结果确认历史容量与短 tag 显示，不单独证明点击有效。
+
+第二轮 SSE 中保留的两个子代理结束事件：
+
+- 短标甲：帧 `0891a057-c230-4021-8f6a-ad12bd567400`，目标会话 `e8a8409b-5163-43e8-ae82-eb1df13186c3`。
+- 短标丙：帧 `265473d4-70ba-454b-8c5a-ad8e9243bbcd`，目标会话 `cde58acd-9f01-49a7-9f95-e25e880496f4`。
+
+已补两处评审指出的测试盲区：被节流抑制的事件保留 suppressed/throttled 诊断且不能推迟下一次允许提醒的时间；窗口恢复成功 spawn 后必须 unref，启动失败路径不调用。独立副本中反向加入节流错位、删除 unref 均导致对应测试失败。API 版本复用设置页版本，与 package.json 的 0.6.3 一致，没有擅自发布新版本。
+
+完整 npm test 通过：浏览器 M1 320 项、host 333 项及原有 v0.3 断言。容量模型覆盖 Web/EventEmitter 两条点击路径，短 tag 的 64 字符边界、close 不清历史、同 tag 替换、缺失/迟到显示回调、旧对象迟到回调、构造失败不消耗槽位、三个保留项各自跳转、平台隔离与卸载；EventEmitter 仅是兼容性模型，真实 DSH 渲染进程仍为 Web API。独立副本删掉短 tag 后，容量与短标识断言共 6 项失败，确认模型能抓住本次回归。npm pack --dry-run 确认 host/desktop.js 入包。
+
+评审的 Origin 归一化建议不作为本次必要修复：localhost 与 127.0.0.1 属不同 Origin，不能简单等同放行；现有来源围栏与路由矩阵仍通过。macOS 没有此次容量规则，未做 macOS 实机重测。
+
+本轮点击验收尚待用户操作：已明确将 DSH 切到 strat，读取标题确认后最小化并把 Sourcetree 放到前台，请用户点击上述短标甲结束通知。等待期间未再激活 DSH，不能把之前 remote 的点击通过沿用为本轮短 tag 的实机结果。临时配置已通过 API 恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true，并读回确认；客户端设置的收尾读回在点击验收后进行。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：

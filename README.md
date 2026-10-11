@@ -74,7 +74,7 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 
 Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
-Windows Electron 的通知保留到点击或关闭，避免横幅超时后通知中心条目的点击监听失效。启用自动聚焦时，点击会通过本机 host 打开固定的 `dsh://open`，让 DSH 恢复最小化窗口；会话切换仍走 `uiWorkspace.openSession`。macOS 与普通浏览器不使用这两个 Windows 分支。退出或重启 DSH 后，旧通知不能跳转。
+Windows Electron 的通知保留到点击或关闭，避免横幅超时后通知中心条目的点击监听失效。工作流系统通知轮换使用 3 个固定短 tag，让系统替换旧进展，通知中心最多留下 3 条工作流进展；SSE/Webhook 仍完整逐事件投递，完成、需要你操作、出错等其他通知不受此容量规则影响。启用自动聚焦时，点击会通过本机 host 打开固定的 `dsh://open`，让 DSH 恢复最小化窗口；会话切换仍走 `uiWorkspace.openSession`。macOS 与普通浏览器不使用这些 Windows 适配规则。退出或重启 DSH 后，旧通知不能跳转。
 
 > **改动自动保存**（v0.6.2）：设置页不再有底部「保存设置」按钮 —— 按钮在最底下，改完没滚到底就切走会以为没生效。现在**任何改动停止约 0.8 秒后自动落盘**（连续输入合并为一次写入），底部仅显示保存状态。host 离线时写入本地偏好层。
 
@@ -158,7 +158,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 
 从 GitHub 克隆本仓库开发（`git clone git@github.com:Leo-Cjw/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
 
-- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 **243 项**（v0.6.3）：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致 / **v0.6.3 跳转会话组**——真导航路径、老宿主兜底正反两面、归档/phase/state 闸门、`ids` vs `byId`、半初始化服务实例不被永久缓存、双形态 Notification（`on('click')` 与 `onclick` 各一条）、同一次完成双源去重、`navLog`/`deliverLog` 轨迹）；host 半：`node test/host.test.mjs`（317 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
+- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 **320 项**：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致 / **v0.6.3 跳转会话组**——真导航路径、老宿主兜底正反两面、归档/phase/state 闸门、`ids` vs `byId`、半初始化服务实例不被永久缓存、双形态 Notification（`on('click')` 与 `onclick` 各一条）、同一次完成双源去重、`navLog`/`deliverLog` 轨迹）；host 半：`node test/host.test.mjs`（333 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
 - 发布流程：改 `lib/` 与 `package.json` → `node tools/sync-settings-view.mjs`（设置页视图内联进 client.js，`npm test` 前会自动执行）→ 跑测试 → 升版本 → `git push` + 打 tag → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention"|"done"|"error")` 验证
 - **复盘文档**：[postmortem-0.6.3-nav.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/postmortem-0.6.3-nav.md)（「点击通知不跳转会话」六轮排查的方法论：静默失败必须自带可观测性、观测代码要与被测代码同源、mock 保真度决定测试有效性）
 - 架构文档：[functional-architecture.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
