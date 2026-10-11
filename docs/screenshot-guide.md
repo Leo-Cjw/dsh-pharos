@@ -14,7 +14,7 @@
 | `screenshot-8-settings-debug.png` | Windows 高级、测试、Debug | 测试按钮只验证页内提示和声音的说明，以及自动保存状态；不是系统通知验收证明 |
 | `screenshot-9-webhook-formats.png` | Windows Webhook 格式 | 简洁、详细、自定义三档；示例明确禁用且不含真实密钥 |
 
-当前 Windows 图片直接保存窗口捕获结果，未合成界面、改写文字或绘制通知。原始窗口尺寸为 1920×1032；配置画面位于中央设置对话框。保留完整窗口时，阅读者可打开原图查看文字。
+当前 Windows 图片由真实窗口捕获结果裁切而来，只去掉空白和无关背景，未缩放、合成界面、改写文字或绘制通知。原始窗口尺寸为 1920×1032；插件详情图裁为 980×530，已安装插件列表裁为 990×580，五张设置图均裁为 802×801，保留完整设置对话框和展开的提醒选项。原始完整窗口图已备份到本机 `%TEMP%/pharos-screenshot-raw-c334fb4`。
 
 本次拍摄前备份本机安装副本的 package.json 到 `%TEMP%/pharos-screenshots-package-before.json`，再同步仓库元数据并正常重启 DSH，避免代码与详情页描述来自不同版本。为展示 Webhook 格式，仅临时加入一个 enabled=false、无 secret、地址为 `https://example.invalid/pharos` 的示例；拍完已恢复 webhooks=[]，读回 enabled=true、autoFocus=true。没有执行 Webhook 推送，也没有改变通知权限或操作系统设置。
 
