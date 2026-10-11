@@ -136,7 +136,11 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 评审的 Origin 归一化建议不作为本次必要修复：localhost 与 127.0.0.1 属不同 Origin，不能简单等同放行；现有来源围栏与路由矩阵仍通过。macOS 没有此次容量规则，未做 macOS 实机重测。
 
-本轮点击验收尚待用户操作：已明确将 DSH 切到 strat，读取标题确认后最小化并把 Sourcetree 放到前台，请用户点击上述短标甲结束通知。等待期间未再激活 DSH，不能把之前 remote 的点击通过沿用为本轮短 tag 的实机结果。临时配置已通过 API 恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true，并读回确认；客户端设置的收尾读回在点击验收后进行。
+本轮点击验收尚待用户操作：请用户点击上述短标甲结束通知。等待期间曾打开 DSH 核对客户端配置并补拍设置图，随后关闭设置页，确认仍停在 strat，再次最小化并把 Sourcetree 放到前台；没有重启进程或更换会话。不能把之前 remote 的点击通过沿用为本轮短 tag 的实机结果。
+
+临时配置已通过 API 恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true，并读回确认；设置表单也显示工作流两开关关闭、声音与自动聚焦开启。客户端 Debug 仍保留进程载入时的 workflowEvents=true、workflowLog=true，sound=true、autoFocus=true、currentQuiet=true，当前会话为 strat，navLog=[]，三个槽位仍指向甲、丙及汇总阶段。服务端关闭阻止后续工作流推送；为保留当前通知的点击监听，进程重启及客户端配置最终读回须在点击验收之后完成。
+
+基本设置和提醒时机两张已按实际安装的 `cf214de` 客户端重拍，并仅做 802×801 真实裁切，保留新容量提示和完成提醒三档选项；这不代替系统通知点击结果。
 
 ## 再次排查
 
