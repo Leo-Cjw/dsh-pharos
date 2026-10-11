@@ -185,10 +185,19 @@ function reload(overrides = {}) {
     bag.nativeAttempts.push({ nativeTag, title, shown: nativeTag.length <= bag.nativeTagLimit });
     if (nativeTag.length <= bag.nativeTagLimit) {
       bag.nativeHistory ??= new Map();
+      bag.nativeClickListeners ??= new Map();
       const previous = bag.nativeHistory.get(nativeTag);
-      if (previous) { previous.n.closed = true; previous.n.onclose?.(); }
+      n.nativeTag = nativeTag;
+      bag.nativeClickListeners.set(nativeTag, n);
       bag.nativeHistory.set(nativeTag, { n, title, body: o.body });
       queueMicrotask(() => n.onshow?.({}));
+      // Electron closes the old native object after Chromium registered the new
+      // listener under the same ID. Its delayed close can invalidate that ID.
+      if (previous) queueMicrotask(() => {
+        const current = bag.nativeClickListeners.get(nativeTag);
+        if (current) { current.closed = true; current.onclose?.(); }
+        bag.nativeClickListeners.delete(nativeTag);
+      });
     }
   }
   // 双形态 Notification mock（与文件头的基线 mock 同构）：默认 electron 形态
@@ -209,7 +218,8 @@ function reload(overrides = {}) {
             // Electron 的默认横幅超时派发 Web close；Chromium 会移除监听，
             // 通知中心的后续 click 无法回到 renderer。reminder 不自动超时。
             if (event === 'timeout') { if (!o.requireInteraction) listenerActive = false; return; }
-            if (event === 'click' && listenerActive && !this.closed && typeof this.onclick === 'function') this.onclick();
+            if (event === 'click' && listenerActive && !this.closed &&
+                (!this.nativeTag || bag.nativeClickListeners.get(this.nativeTag) === this) && typeof this.onclick === 'function') this.onclick();
           } });
           recordNativeAttempt(this, title, o);
         }
@@ -227,7 +237,8 @@ function reload(overrides = {}) {
         const self = this;
         // 同上：点击只派发 on('click')，不回落 onclick
         bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: (ev) => {
-          if (!self.closed) for (const fn of [...(self._handlers.get(ev) ?? [])]) fn();
+          if (!self.closed && (!self.nativeTag || bag.nativeClickListeners.get(self.nativeTag) === self))
+            for (const fn of [...(self._handlers.get(ev) ?? [])]) fn();
         } });
       }
       on(ev, fn) { const a = this._handlers.get(ev) ?? []; a.push(fn); this._handlers.set(ev, a); return this; }
@@ -1203,13 +1214,17 @@ if (!m1Ready) {
     m1a(focusRequests.length === 8 && r.bag.opened.length === beforeNoFocus + 1, '关闭自动聚焦仍切会话但不请求窗口恢复');
   }
 
-  // Windows 工作流用固定短 tag 替换：即使 close 不清历史也只能留下 3 条。
+  // Windows 工作流用唯一短 tag 保留监听，原生 History.Remove 才真正清理历史。
   for (const notificationStyle of ['web', 'electron']) {
     localStorage.removeItem('dshPharos.config');
     const focusRequests = [];
     const r = m1Reload({ notificationStyle, bag: { pageFocus: false, nativeTagLimit: 64 },
       userAgent: 'Windows NT Electron/44.0.0', fetch: async (url, opts) => {
         if (url === '/pharos/api/desktop-focus') { focusRequests.push(opts); return { ok: true, status: 200 }; }
+        if (url === '/pharos/api/workflow-history') {
+          for (const tag of JSON.parse(opts.body).tags) r.bag.nativeHistory.delete('n#dsh-app://app#' + tag);
+          return { ok: true, json: async () => ({ removed: true }) };
+        }
         return global.fetch(url, opts);
       } });
     const ids = Array.from({length:9}, (_, i) => 'session-aaaaaaaa-bbbb-cccc-dddd-' + String(i).padStart(12,'0'));
@@ -1223,17 +1238,21 @@ if (!m1Ready) {
       await m1Wait(10);
     }
     const progress=r.bag.notifications.slice(1);
+    await m1Wait(220);
     m1a(progress.length===9 && api.debug().recentFrames.filter(f=>f.kind==='workflow').length===9,
       notificationStyle+': 全部工作流事件仍送达，不在 SSE 层丢事件');
     const history=[...r.bag.nativeHistory.values()];
     m1a(history.length===4 && history.filter(x=>x!==critical && x.title===progress[0].title).length===3 &&
       history.slice(1).map(x=>x.body).join(',')===progress.slice(6).map(x=>x.body).join(','),
       notificationStyle+': 原生历史保留最近 3 条进展以及原有错误通知');
-    m1a(progress.every(x=>x.n.opts.requireInteraction && /^pharos-wf-[0-2]$/.test(x.tag)) &&
+    m1a(progress.every(x=>x.n.opts.requireInteraction && /^pharos-wf-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/.test(x.tag)) &&
+      new Set(progress.map(x=>x.tag)).size === 9 &&
       r.bag.nativeAttempts.every(x=>x.shown && x.nativeTag.length<=64),
-      notificationStyle+': 长会话使用固定短 tag，原生标识不超长，仍持久显示');
-    m1a(progress.every(x=>!x.n.closeCalls) && !critical.n.closed,
-      notificationStyle+': 替换由系统完成，不 close 旧对象误关同 tag 的新通知');
+      notificationStyle+': 长会话使用唯一短 tag，原生标识不超长，也不复用点击监听 ID');
+    m1a(progress.slice(0,6).every(x=>x.n.closed) && progress.slice(6).every(x=>!x.n.closed) && !critical.n.closed,
+      notificationStyle+': 关闭已淘汰对象不会关闭最新三条或普通通知');
+    m1a(api.debug().workflowHistoryCleanup.pending===0 && api.debug().workflowHistoryCleanup.error===null,
+      notificationStyle+': 原生历史清理已确认成功，不只检查 JS 集合大小');
     m1a(api.debug().workflowNotificationSlots.map(x=>x.sessionId).join(',')===ids.slice(6).join(','),
       notificationStyle+': Debug 槽位指向各 tag 最近请求的会话');
     const beforeToast=toastCount(r), beforeNav=r.bag.opened.length;
@@ -1248,24 +1267,67 @@ if (!m1Ready) {
       notificationStyle+': 卸载释放槽位，仅关闭自身工作流对象');
   }
 
-  // 缺失、乱序显示回调不影响历史上限；构造失败不消耗槽位。
+  // Cleanup failures are visible and retried; a late show needs another removal
+  // even when its original removal request is still in flight.
+  {
+    localStorage.removeItem('dshPharos.config');
+    let calls=0;
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false,nativeTagLimit:64},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url!=='/pharos/api/workflow-history')return global.fetch(url,opts);
+      if(++calls===1)return {ok:false,status:503};
+      for(const tag of JSON.parse(opts.body).tags)r.bag.nativeHistory.delete('n#dsh-app://app#'+tag);
+      return {ok:true,json:async()=>({removed:true})};
+    }});
+    const ui=m1Apply(r),api=r.context.window.__dshPharos,es=r.ES.instances.at(-1);
+    for(let i=0;i<4;i++)es.dispatch(m1Frame('workflow','RETRY-'+i,'',{dedupeKey:'retry-'+i}),'pharos');
+    await m1Wait(150);
+    m1a(api.debug().workflowHistoryCleanup.pending===1 && api.debug().workflowHistoryCleanup.error!==null,
+      '清理失败保留待清理 ID 并在 Debug 明确显示失败');
+    await m1Wait(560);
+    m1a(calls===2 && r.bag.nativeHistory.size===3 && api.debug().workflowHistoryCleanup.pending===0,
+      '原生历史清理失败后重试成功，仍只剩最新三条');ui.teardown();
+  }
+  {
+    localStorage.removeItem('dshPharos.config');
+    let calls=0,release;
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false,nativeTagLimit:64},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url!=='/pharos/api/workflow-history')return global.fetch(url,opts);
+      calls++;
+      for(const tag of JSON.parse(opts.body).tags)r.bag.nativeHistory.delete('n#dsh-app://app#'+tag);
+      if(calls===1)await new Promise(resolve=>{release=resolve;});
+      return {ok:true,json:async()=>({removed:true})};
+    }});
+    const ui=m1Apply(r),api=r.context.window.__dshPharos,es=r.ES.instances.at(-1);
+    for(let i=0;i<4;i++)es.dispatch(m1Frame('workflow','LATE-'+i,'',{dedupeKey:'late-'+i}),'pharos');
+    await m1Wait(150);
+    const old=r.bag.notifications[0];
+    r.bag.nativeHistory.set(old.n.nativeTag,{n:old.n,title:old.title,body:old.body});old.n.onshow();
+    m1a(calls===1 && api.debug().workflowHistoryCleanup.running,'清理串行执行，迟到显示不并发启动第二个请求');
+    release();await m1Wait(160);
+    m1a(calls===2 && !r.bag.nativeHistory.has(old.n.nativeTag) && api.debug().workflowHistoryCleanup.pending===0,
+      '进行中清理后的迟到显示仍再次删除，不被旧请求成功误清待办');
+    ui.teardown();old.n.onshow();await m1Wait(150);
+    m1a(calls===2 && api.debug().workflowHistoryCleanup.pending===0,'卸载后迟到回调不启动新清理请求');
+  }
+
+  // 缺失、乱序显示回调不覆盖入口；构造失败不消耗唯一 ID。
   {
     localStorage.removeItem('dshPharos.config');
     const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0'});
     const ui=m1Apply(r), api=r.context.window.__dshPharos, es=r.ES.instances.at(-1);
     for (let i=0;i<4;i++) { es.dispatch(m1Frame('workflow','P-'+i,'',{dedupeKey:'p-'+i}),'pharos'); await m1Wait(10); }
-    m1a(api.debug().workflowNotificationSlots.length===3 && r.bag.notifications.at(-1).tag==='pharos-wf-0',
-      '未收到任何 show 回调仍按请求使用固定 3 槽位');
+    m1a(api.debug().workflowNotificationSlots.length===3 && r.bag.notifications.at(-1).tag.endsWith('-3'),
+      '未收到任何 show 回调仍只保留最近 3 条入口');
     r.bag.notifications[0].n.onshow(); r.bag.notifications.at(-1).n.onshow();
     m1a(api.debug().recentNotifications[0].result==='requested' && api.debug().recentNotifications.at(-1).result==='shown',
       '被替换对象的迟到 show 不把旧请求误报成显示成功');
     r.bag.notificationThrows=true;
     es.dispatch(m1Frame('workflow','FAIL','',{dedupeKey:'fail'}),'pharos'); await m1Wait(10);
-    m1a(api.debug().workflowNotificationSlots.map(x=>x.sessionId).join(',')==='P-3,P-1,P-2',
+    m1a(api.debug().workflowNotificationSlots.map(x=>x.sessionId).join(',')==='P-1,P-2,P-3',
       '构造失败不覆盖既有槽位');
     r.bag.notificationThrows=false;
     es.dispatch(m1Frame('workflow','NEXT','',{dedupeKey:'next'}),'pharos'); await m1Wait(10);
-    m1a(r.bag.notifications.at(-1).tag==='pharos-wf-1','构造失败不消耗后续槽位序号');
+    m1a(r.bag.notifications.at(-1).tag.endsWith('-4'),'构造失败不消耗后续唯一 ID 序号');
     ui.teardown();
   }
 

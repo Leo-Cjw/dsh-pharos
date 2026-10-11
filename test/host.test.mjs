@@ -23,7 +23,9 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 import { restoreWindowsDesktop } from '../lib/host/desktop.js';
+import { removeWindowsWorkflowHistory, validWorkflowTags } from '../lib/host/notification-history.js';
 
 let failed = 0;
 let passed = 0;
@@ -1415,6 +1417,67 @@ if (!stats) {
   cfg.enabled = true; throwFocus = true;
   assert((await focus()).state.status === 500, '协议启动异常回传失败状态');
   ds();
+}
+
+// Native workflow history cleanup: scoped identifiers, fixed program and bounded child lifetime.
+{
+  const tag = 'pharos-wf-abc-def-0';
+  assert(validWorkflowTags([tag]) && !validWorkflowTags([]) && !validWorkflowTags(Array(129).fill(tag)), '历史清理只接受非空、最多 128 个工作流 ID');
+  assert(['pharos-wf-0', 'session-123', 'x;Start-Process calc', 'pharos-wf-' + 'a'.repeat(50) + '-b-0'].every(x => !validWorkflowTags([x])),
+    '历史清理拒绝旧共享 ID、会话 ID、命令字符和超长标识');
+  const launches = []; let payload, killed = 0;
+  const fakeLaunch = (...args) => {
+    launches.push(args);
+    const child = new EventEmitter(); child.stdin = new EventEmitter();
+    child.stdin.end = data => { payload = data; queueMicrotask(() => child.emit('close', 0)); };
+    child.kill = () => { killed++; }; return child;
+  };
+  assert(await removeWindowsWorkflowHistory([tag], {platform:'darwin',launch:fakeLaunch}) === false && !launches.length,
+    '其他平台不启动原生历史清理');
+  assert(await removeWindowsWorkflowHistory([tag,tag], {platform:'win32',launch:fakeLaunch,systemRoot:'C:\\Windows'}) === true,
+    '原生历史清理等待子进程成功结束');
+  const [program,args,options] = launches[0];
+  const script = Buffer.from(args.at(-1),'base64').toString('utf16le');
+  assert(program === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' && options.shell === false && options.windowsHide === true,
+    '清理使用固定系统程序、无 shell、隐藏窗口');
+  assert(JSON.parse(payload).length===1 && !script.includes(tag) && script.includes("'Notifications', 'electron.app.DeepSeek Harness'") && !script.includes('.Clear('),
+    '清理标识去重后经 stdin 传递，脚本固定应用和分组，不清空其他通知');
+  assert(script.includes('$nativeTags -ccontains $toast.Tag'), '历史清理后读回检查，不把成功退出当成删除成功');
+  if (process.platform === 'win32') {
+    const parser = script.slice(0, script.indexOf('$history =')) + '\nConvertTo-Json -InputObject $nativeTags -Compress';
+    const secondTag='pharos-wf-abc-def-1';
+    const result=spawnSync(program,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(parser,'utf16le').toString('base64')],
+      {input:JSON.stringify([tag,secondTag]),encoding:'utf8',shell:false,windowsHide:true,timeout:8000});
+    assert(result.status===0 && JSON.parse(result.stdout).join(',')===[tag,secondTag].map(x=>'n#dsh-app://app#'+x).join(','),
+      '真实 Windows PowerShell 能逐条解析多 tag，防止 ConvertFrom-Json 嵌套数组导致假成功');
+  }
+  let error;
+  try { await removeWindowsWorkflowHistory([tag], {platform:'win32',launch:() => {
+    const c = new EventEmitter();c.stdin=new EventEmitter();c.stdin.end=()=>queueMicrotask(()=>c.emit('close',1));c.kill=()=>{};return c;
+  }}); } catch(e) {error=e;}
+  assert(error?.message==='workflow history cleanup failed', '原生清理失败不冒充成功');
+  error=null;
+  try { await removeWindowsWorkflowHistory([tag], {platform:'win32',timeoutMs:20,launch:() => {
+    const c = new EventEmitter();c.stdin=new EventEmitter();c.stdin.end=()=>{};c.kill=()=>{killed++;};return c;
+  }}); } catch(e) {error=e;}
+  assert(error?.message==='workflow history cleanup timed out' && killed===1, '超时终止自身清理子进程并回传失败');
+  error=null;
+  try {await removeWindowsWorkflowHistory(['bad'], {platform:'win32',launch:fakeLaunch});}catch(e){error=e;}
+  assert(!!error && launches.length===1, '非法标识不会启动系统程序');
+
+  const ctx=makeStubCtx();const calls=[];let fail=false;
+  const dispose=routes.registerRoutes({webServer:ctx.webServer,store:{getConfig:()=>({enabled:true})},bus:{subscribe:()=>()=>{}},
+    removeWorkflowHistory:async tags=>{calls.push(tags);if(fail)throw Error('cleanup failed');return true;}});
+  const cleanup=async(extra={})=>{const c=callApi(ctx,'/pharos/api/workflow-history',{method:'POST',headers:{'content-type':'application/json','x-pharos-desktop':'1'},body:{tags:[tag]},...extra});await c.done;return c.res;};
+  assert((await cleanup()).state.status===200 && calls[0][0]===tag,'同源桌面请求可清理指定工作流条目');
+  assert((await cleanup({remoteAddress:'10.0.0.1'})).state.status===403,'历史清理拒绝非 loopback');
+  assert((await cleanup({headers:{'content-type':'application/json','x-pharos-desktop':'1',host:'attacker.example'}})).state.status===403,'历史清理拒绝伪造 Host');
+  assert((await cleanup({headers:{'content-type':'application/json','x-pharos-desktop':'1',origin:'https://evil.example'}})).state.status===403,'历史清理拒绝跨站 Origin');
+  assert((await cleanup({headers:{'content-type':'application/json'}})).state.status===403,'历史清理需要自定义头');
+  assert((await cleanup({method:'GET'})).state.status===405,'历史清理只接受 POST');
+  assert((await cleanup({headers:{'content-type':'text/plain','x-pharos-desktop':'1'}})).state.status===400,'历史清理拒绝简单请求内容类型');
+  assert((await cleanup({body:{tags:['dsh-pharos:ordinary']}})).state.status===400 && calls.length===1,'普通通知 ID 不进入清理程序');
+  fail=true;assert((await cleanup()).state.status===500,'历史清理程序异常回传失败');dispose();
 }
 
 console.log(failed === 0

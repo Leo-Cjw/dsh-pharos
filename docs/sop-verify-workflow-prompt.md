@@ -70,7 +70,7 @@ meta 请填：
 …
 ```
 
-共约 **9 个工作流事件**（3 phase + 3 agent-start + 3 agent-end）。Windows Electron 使用 **3 个固定短 tag** 替换旧进展，系统通知历史最多留下 **3 条工作流进展**；SSE/Debug/Webhook 仍逐事件到达。macOS 和普通浏览器不应用该容量规则。
+共约 **9 个工作流事件**（3 phase + 3 agent-start + 3 agent-end）。Windows Electron 使用**每条唯一短 tag**，保留最新 **3 条工作流进展**入口；本机 host 异步调用原生历史 API 清理旧条目，清理后应再读通知中心核实。若 `debug().workflowHistoryCleanup` 有 error 或 pending 长期不归零，不能判容量通过。SSE/Debug/Webhook 仍逐事件到达。macOS 和普通浏览器不应用该容量规则。
 若 `meta.name` 已被 pharos 兜底成空串，正文会退化为「工作流进入阶段：…」
 （**不会**出现「工作流『工作流』」这种双前缀 —— 那是 v0.6.0 之前修掉的缺陷）。
 

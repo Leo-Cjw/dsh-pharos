@@ -154,7 +154,23 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 点击验收指定再验丙结束通知，目标 childId 为 `2d5e418c-34ce-451a-94b0-8aa64ed9a157`。点击前已通过设置 Debug 读回：当前会话为 strat（`session-52766c78-2c8b-4911-9f78-d20217e418ad`）、navLog=[]、permission=granted、sse=open，`pharos-wf-1` 槽位指向上述 childId；随后关闭设置、再次观察 strat 主视图、最小化 DSH 并将 Sourcetree 切到前台。点击前调试证据保存在 `%TEMP%/pharos-screenshot-raw-cf214de/candidate3-before-click.txt`。
 
-Windows 通知中心仍未成为电脑插件可操作窗口，因此已请用户点击上述确切条目，尚未取得点击后证据，不能宣布短 tag 点击通过。服务端测试配置已恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true；为保留此次原生点击监听暂不重启客户端，客户端仍保留本轮临时配置，点击验收后需正常重启并核实恢复。
+用户点击后反馈 DSH 没有恢复前台。任何手动激活前，只读窗口清单仍为 strat；原生历史从 3 条变为 2 条，但消失的是汇总阶段，再验丙仍存在。这与指定点击对象不一致，原因未确定，不能据此推断用户点击了哪一条。随后手动打开 DSH 读取 Debug：navLog=[]，当前仍为 strat，三个槽位仍存在。固定 tag 候选的实机点击未通过，旧 remote 验收不能代替本轮结果。原始证据为 `%TEMP%/pharos-screenshot-raw-cf214de/candidate3-after-click.txt`。
+
+### 唯一短 tag 与原生历史清理（2026-10-11）
+
+撤回三个固定 tag。检查 [Electron 通知服务](https://github.com/electron/electron/blob/v44.0.0/shell/browser/notifications/platform_notification_service.cc)、[通知容器](https://github.com/electron/electron/blob/v44.0.0/shell/browser/notifications/notification_presenter.cc) 和 [Chromium 事件分发器](https://chromium.googlesource.com/chromium/src/+/HEAD/content/browser/notifications/notification_event_dispatcher_impl.cc) 后，识别出同 ID 生命周期冲突：新 Web 监听注册后，宿主关闭同 ID 的旧原生通知，旧 close 可以移除新监听。这是源码链支持的原因推断，未捕获本机原生回调顺序，不能把它说成本机日志直接证明。
+
+新实现对每条工作流通知生成唯一短 tag，最近三个通知对象分别保留各自的真实会话 ID。淘汰旧对象时 close 只释放对象，历史删除由本机 `/pharos/api/workflow-history` 负责：系统 Windows PowerShell 执行固定脚本，通过 stdin 接收严格校验的插件 tag，调用 [History.Remove](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationhistory.remove?view=winrt-26100)，并读回确认目标已不存在。只处理本应用 Notifications 组的指定工作流条目，不删除普通提醒；不接收命令、路径或 URL。请求串行批量执行，失败最多重试三次，迟到的旧 show 会再次排队；pending/running/failures/error 在 Debug 可见。没有可用 host 或清理失败时不能保证历史容量。旧版本和旧实例历史不会自动接管，重启仍不能延续旧点击监听。
+
+第四轮 `pharos-workflow-candidate4` 收到 9 个提醒和 1 个静默日志，但自动清理后留下 8 条，容量未通过。查到 PowerShell 中 `@(... | ConvertFrom-Json)` 把多 tag 包成嵌套数组，拼接时产生包含空格的错误 ID；Remove 对不存在的 ID 不报错，因而子进程退出成功不能证明删除成功。已改为直接解析、逐项拼接，并增加原生历史读回校验和真实 Windows PowerShell 多 tag 解析测试。随后用修正后的程序清理这轮指定条目，读回确认删除；这次补清不计作自动容量通过。其他失败轮次的任务测试通知也按明确 tag 清理，普通提醒不受影响。
+
+第五轮 `pharos-workflow-candidate5` 首次请求因上游 `fetch failed` 在工作流启动前失败，SSE 没有工作流事件；重试一次后真实工作流完成。独立 SSE 收到 9 个提醒和 1 个静默日志，Windows 原生历史自动清理后只剩 3 条：五验乙结束、五验甲结束、汇总阶段，没有手工删除本轮通知。原生 tag 为 `n#dsh-app://app#pharos-wf-mv3vm9lc-x55rx8i5-6/7/8`，各为 43 字符；此结果验证自动容量，不单独证明点击。
+
+本轮指定点击“五验甲结束”，真实 childId 为 `01271189-87a6-433e-a629-f06ecd125371`，对应序号 7。点击前 Debug 确认当前为 strat（`session-52766c78-2c8b-4911-9f78-d20217e418ad`）、navLog=[]、上述三个唯一 tag 与各自会话对应，workflowHistoryCleanup 为 pending=0、running=false、failures=0、error=null，autoFocus=true；随后关闭设置，复查 strat，最小化 DSH，并把 Sourcetree 放到前台。电脑工具仍不能操作通知中心，因此请用户点击此确切通知，点击后证据尚待取得。
+
+第五轮原始记录为 `%TEMP%/pharos-workflow-candidate5-sse.jsonl`、`pharos-workflow-candidate5-history.json`、`pharos-screenshot-raw-cf214de/candidate5-before-click.txt`。源文件和安装文件对齐：client SHA-256 为 `D7A8BF3E3B105EB3657CEF5E14DC77D573ED0AD3E58CEA0F37A705AD603F7209`；notification-history SHA-256 为 `0ABB842B4471646577F3CD638AFF8F9D4EF6CC259A40C3FAB24DBEC147D8463C`。服务端测试配置已恢复并读回 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true；为保留本轮点击监听，客户端暂未重启，最终恢复仍需验收后正常重启并读回。
+
+新实现完整 `npm test` 通过：浏览器 M1 327 项、host 353 项及原有 v0.3 断言。host 数量包含 Windows 上实际运行的 PowerShell 多 tag 解析测试。模型新增同 ID 旧 close 清除新监听的场景，覆盖 Web/EventEmitter 最近三个通知各自点击、异步清理失败重试、清理中迟到 show 的修订号、卸载停止请求，以及严格来源与 tag 校验、固定程序/stdin、子进程失败与超时。独立副本改回固定三个 tag 后产生 10 项 M1 失败，包含两种 API 的点击导航断言；该反向检查不能替代实机点击。`npm pack --dry-run` 返回 26 个文件，新增 `lib/host/notification-history.js` 已入包。版本仍为 0.6.3，未发布新版本，macOS 未实机重测。
 
 ## 再次排查
 
