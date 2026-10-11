@@ -111,7 +111,11 @@ macOS 行为由平台分支回归保护，本次未在 macOS 实机重测。退�
 
 关闭自动聚焦的场景 B 已确认后台跳转：通过设置页将 autoFocus 从 true 改为 false，API 读回 false；关闭设置，明确切到 strat，重新读取标题后最小化 DSH，再将 Sourcetree 切到前台。发送 remote 帧 `31f6532c-4c01-4118-aa39-45168b1f21c1`，正文含“Windows 关闭自动聚焦验证 B”；原生 Tag 为 `n#dsh-app://app#20E5B8BFB1E30E686BAB20952860AA4C`，scenario 为 reminder。用户点击后反馈“仍留在 Sourcetree”。在任何手动激活前，只读窗口清单已显示验收会话标题，确认点击切换了后台会话且没有恢复前台；此结论不依赖随后手动打开 DSH。
 
-B 的用户反馈后，工具两次手动激活 DSH 均返回 `failed to activate captured window`，尚未读取此次客户端 navLog。已通过配置 API 仅恢复 autoFocus=true 并读回确认，再调用项目自身恢复接口，响应 requested=true；后续截图仍是桌面，因此不把接口响应当作窗口已恢复的证明。服务端原设置已恢复，当前客户端内存状态仍待 DSH 可操作后核实。
+B 的用户反馈后，工具两次手动激活 DSH 均返回 `failed to activate captured window`，当时尚未读取此次客户端 navLog。通过配置 API 仅恢复 autoFocus=true 并读回确认，再调用项目自身恢复接口，响应 requested=true；后续截图仍是桌面，因此没有把接口响应当作窗口已恢复的证明。
+
+2026-10-11 收尾：用户反馈已打开 DSH 后，工具成功恢复窗口，主视图仍是验收会话。设置页自动聚焦复选框已勾选，点击 Debug 刷新后客户端实际 `config.autoFocus=true`，关闭设置后服务端 API 再次读回 true，确认原设置已恢复。诊断保留的 A/B 两次追加点击均为 `from=system-notification, outcome=navigated, alreadyCurrent=false, currentAtClick=session-52766c78-2c8b-4911-9f78-d20217e418ad`，目标和当前会话均为 `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc`，再次确认跨会话跳转。
+
+B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HTTP 成功，不检查响应中的 requested，也不证明窗口已恢复。接口在 autoFocus=false 时可返回 200 和 requested=false。因此 B 的“不恢复前台”结论依据用户仍留在 Sourcetree 的反馈，不能扩展为“客户端没有发出任何聚焦请求”。本次未保存 B 点击时恢复接口的响应正文。
 
 ## 再次排查
 
