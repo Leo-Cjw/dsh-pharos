@@ -148,6 +148,14 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 基本设置和提醒时机两张已按实际安装的 `cf214de` 客户端重拍，并仅做 802×801 真实裁切，保留新容量提示和完成提醒三档选项；这不代替系统通知点击结果。
 
+### 第三轮真实工作流复核（2026-10-11）
+
+正常退出重启 DSH 后运行 `pharos-workflow-candidate3`，独立 SSE 连接收到 9 个提醒事件及 1 个静默 log。WinRT 历史再次确认只有 3 条该工作流进展：再验甲结束、再验丙结束、汇总阶段，分别使用 `pharos-wf-0/1/2`。稍后复查仍为 3 条，再验丙条目仍存在。原始记录为本机 `%TEMP%/pharos-workflow-candidate3-sse.jsonl` 与 `pharos-workflow-candidate3-history.json`。
+
+点击验收指定再验丙结束通知，目标 childId 为 `2d5e418c-34ce-451a-94b0-8aa64ed9a157`。点击前已通过设置 Debug 读回：当前会话为 strat（`session-52766c78-2c8b-4911-9f78-d20217e418ad`）、navLog=[]、permission=granted、sse=open，`pharos-wf-1` 槽位指向上述 childId；随后关闭设置、再次观察 strat 主视图、最小化 DSH 并将 Sourcetree 切到前台。点击前调试证据保存在 `%TEMP%/pharos-screenshot-raw-cf214de/candidate3-before-click.txt`。
+
+Windows 通知中心仍未成为电脑插件可操作窗口，因此已请用户点击上述确切条目，尚未取得点击后证据，不能宣布短 tag 点击通过。服务端测试配置已恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true；为保留此次原生点击监听暂不重启客户端，客户端仍保留本轮临时配置，点击验收后需正常重启并核实恢复。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：
