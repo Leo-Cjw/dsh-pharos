@@ -140,7 +140,11 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 用户要求代理自行点击后，重新检查 Windows 界面工具：Sourcetree、DSH 均可选中，开始菜单可以打开并已关闭，但系统任务栏/通知中心不在可操作窗口列表，界面树也未返回系统面板控件。因此未执行通知中心点击；保留当前进程与通知，不将代码调用 onclick 或读取原生历史当作实际点击验收。
 
-临时配置已通过 API 恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true，并读回确认；设置表单也显示工作流两开关关闭、声音与自动聚焦开启。客户端 Debug 仍保留进程载入时的 workflowEvents=true、workflowLog=true，sound=true、autoFocus=true、currentQuiet=true，当前会话为 strat，navLog=[]，三个槽位仍指向甲、丙及汇总阶段。服务端关闭阻止后续工作流推送；为保留当前通知的点击监听，进程重启及客户端配置最终读回须在点击验收之后完成。
+临时配置已通过 API 恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true，并读回确认；设置表单也显示工作流两开关关闭、声音与自动聚焦开启。首次客户端 Debug 仍保留进程载入时的 workflowEvents=true、workflowLog=true，sound=true、autoFocus=true、currentQuiet=true，当前会话为 strat，navLog=[]，三个槽位仍指向甲、丙及汇总阶段；当时为保留通知监听未重启。
+
+后续两次 WinRT 读回均不再包含 `pharos-workflow-candidate2` 条目，DSH 仍停在 strat。重启前再次读取客户端 Debug，navLog=[]，三个槽位仍存在；没有点击或导航记录。原生历史消失的原因未确定，不能据此宣称点击通过或发生导航回归，也不能继续要求点击这轮已不存在的通知。
+
+确认旧条目不存在后，从 DSH「应用 → 退出」正常退出；应用列表确认已停止，再启动现有客户端。新窗口读回 Debug：workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true，configSource=server、sse=open、workflowNotificationSlots=[]，当前仍为 strat。服务端与客户端配置恢复均已完成；短 tag 点击验收需重建新一轮真实事件及可操作的通知中心入口。调试原始证据保存在本机 `%TEMP%/pharos-screenshot-raw-cf214de/client-debug-after-history-disappeared.txt` 与 `client-debug-final-restored.txt`。
 
 基本设置和提醒时机两张已按实际安装的 `cf214de` 客户端重拍，并仅做 802×801 真实裁切，保留新容量提示和完成提醒三档选项；这不代替系统通知点击结果。
 
