@@ -190,6 +190,16 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 新实现完整 `npm test` 通过：浏览器 M1 327 项、host 353 项及原有 v0.3 断言。host 数量包含 Windows 上实际运行的 PowerShell 多 tag 解析测试。模型新增同 ID 旧 close 清除新监听的场景，覆盖 Web/EventEmitter 最近三个通知各自点击、异步清理失败重试、清理中迟到 show 的修订号、卸载停止请求，以及严格来源与 tag 校验、固定程序/stdin、子进程失败与超时。独立副本改回固定三个 tag 后产生 10 项 M1 失败，包含两种 API 的点击导航断言；该反向检查不能替代实机点击。`npm pack --dry-run` 返回 26 个文件，新增 `lib/host/notification-history.js` 已入包。版本仍为 0.6.3，未发布新版本，macOS 未实机重测。
 
+### 正常通知模式对照（2026-10-12，待点击）
+
+用户手动关闭专注模式后，反馈点击一条历史通知已能弹出 DSH。只读 Windows API 确认 NotificationMode=Unrestricted；当时窗口标题仍为 strat，历史条目的具体对象未确定，因此此反馈只作为窗口唤起证据，不计作指定子会话跳转通过。
+
+解锁后，以相同源码正常退出并临时开启 Electron 原生日志重新启动，执行 `pharos-workflow-candidate8`。SSE 收到 9 条提醒和 1 条静默日志，原生历史自动保留八验甲、八验乙、八验丙结束三条，分别使用唯一短 tag 的序号 6/7/8。八验丙的真实目标 childId 为 `f3e74fa8-2fdc-4780-b5ba-d270f9ef5a9a`，tag 为 `n#dsh-app://app#pharos-wf-mv4jefs3-ne6z54nc-8`。本轮没有人工删除历史，系统模式仍读回 Unrestricted，但原生日志仍出现 dismissed，不能把此前 AlarmsOnly 认定为唯一原因。
+
+准备切回 strat 时电脑工具报告有人操作，重新捕获的图像全黑；随后两次窗口激活失败，截图明确为 Windows 锁屏。无法确定锁屏发生在各通知之前还是之后，本轮不能作为“正常模式且桌面解锁”的完整对照。工具没有成功切到 strat、没有执行系统通知点击；当前监听仍保留，需再次解锁后建立点击前后的会话证据。服务端临时配置已恢复 workflowEvents=false、workflowLog=false、sound=true、autoFocus=true、currentQuiet=true；客户端为保留监听暂不重启，配置恢复需最终读回。
+
+前一轮第七轮消息的实际回复也明确说明 workflow 环境没有 timer API，未执行请求中的 30 秒等待。第七轮曾在发送消息后切换会话和窗口，但不能把请求中的等待当作实际执行证据。第八轮没有再请求计时器或终端命令。独立 SSE 已正常退出，原始证据另存于本机 `C:/Users/cjw-9/.codex/visualizations/2026/10/10/01a1234a-9945-7cd1-a2eb-030b77a5a695/pharos-candidate8/`，避免临时文件被清理。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：
