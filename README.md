@@ -74,7 +74,9 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 
 Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
-Windows Electron 的通知保留到点击或关闭，避免横幅超时后通知中心条目的点击监听失效。工作流系统通知使用每条唯一的短 tag，保留最近 3 条入口；本机 host 调用 Windows 历史 API 异步删除已淘汰的工作流条目，避免复用 tag 导致点击监听丢失。清理通过隐藏的系统 Windows PowerShell 批量执行，结果读回核实，失败会重试并显示在 `debug().workflowHistoryCleanup`；没有可用 host 或原生清理失败时，不能保证历史容量。SSE/Webhook 仍完整逐事件投递，完成、需要你操作、出错等其他通知不受此容量规则影响。启用自动聚焦时，点击会通过本机 host 打开固定的 `dsh://open`，让 DSH 恢复最小化窗口；会话切换仍走 `uiWorkspace.openSession`。macOS 与普通浏览器不使用这些 Windows 适配规则。退出或重启 DSH 后，旧通知不能跳转；旧版本历史不会自动接管。
+Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知。助手在横幅超时后保留原生 Activated 回调，点击经 SSE 返回原始会话 ID，再调用 `uiWorkspace.openSession`；启用自动聚焦时仍通过固定 `dsh://open` 恢复最小化窗口。关闭自动聚焦时只切换后台会话。通知使用随机短 ID，不把会话 ID 放进系统 tag，不注册新协议，也不修改系统执行策略。
+
+工作流只保留当前客户端最近 3 条入口；淘汰时删除本应用 Pharos 组的指定历史并读回核实，删除失败时停止本次发送并显示页内反馈。SSE/Webhook 的原始工作流事件仍完整投递，普通通知不受这项三条规则影响。Debug 的 `desktopNativeNotifications`、`nativeNotifications` 和 `recentNotifications[].nativeId` 可确认通道与目标；nativeId 表示系统 API 已接收，不单独证明横幅可见。助手故障不会重复发送 Web 系统通知，而是补一次页内反馈；助手最多保留 512 个未释放条目，用户关闭或点击后释放。macOS 与普通浏览器仍用原来的通知通道。没有新 host 时保留旧 Web 路径及 `workflowHistoryCleanup` 诊断，其历史点击仍可能受宿主关闭事件影响。退出或重启后无法延续旧点击监听，旧版本历史不会自动接管。
 
 > **改动自动保存**（v0.6.2）：设置页不再有底部「保存设置」按钮 —— 按钮在最底下，改完没滚到底就切走会以为没生效。现在**任何改动停止约 0.8 秒后自动落盘**（连续输入合并为一次写入），底部仅显示保存状态。host 离线时写入本地偏好层。
 

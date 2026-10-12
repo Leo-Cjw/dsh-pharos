@@ -210,6 +210,20 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 独立 Windows 原生实验已成功创建 Toast、注册 Activated/Dismissed/Failed，并在 Dismissed 后保留 Activated 委托。它使用系统 Windows PowerShell 的内联代码与内置 .NET 反射，不修改系统执行策略、不注册新协议、不修改 DSH 应用。实验实际记录 `dismissed:pharos-native-probe:TimedOut`，等待人工点击同一条历史通知检验 Activated；当前不计作修复或前台恢复通过。此实验尚未接入插件源码。
 
+### 原生 Windows 适配候选（2026-10-12，第九轮待点击）
+
+用户点击独立实验后，仍在运行的原生助手明确输出 `activated:pharos-native-probe`。同一对象先前已经输出 `dismissed:pharos-native-probe:TimedOut`，因此实测证实原生 Activated 委托可在超时后继续接收历史点击。实验进程已停止，实验不等同于 DSH 会话导航验收。
+
+基于此结果，新 Windows 桌面通道由本机 host 惰性启动系统 Windows PowerShell 原生助手，通过固定内联脚本和 stdin JSON 发送标题/正文，不执行请求里的代码，不修改执行策略、不注册新协议。原生 tag 使用随机短 ID，会话 ID 只留在 host 映射。助手在 TimedOut 后保留 Activated，UserCanceled 后释放；激活经带对应客户端标识的 SSE 消息返回原始会话，各页面只消费自己的标识，再复用现有导航服务。自动聚焦仍由现有固定 `dsh://open` 接口处理，并读取当前服务端开关。原生事件不进入提醒总线或 Webhook，不再次响铃。
+
+工作流按当前客户端只保留最近 3 个原生入口，淘汰先删除本应用 Pharos 组的指定历史并读回核实，删除失败不继续发送第四条。助手最多保留 512 个未释放条目，单条显示/删除命令 15 秒超时，宿主卸载关闭 stdin 并结束助手；原生失败只补一次页内提示，不再发送 Web 系统通知。macOS/普通浏览器不启用此通道，没有新 host 时仍走兼容旧路径。原生 ID 表示系统 API 已接收，不作为横幅可见的单独证明；退出/重启后旧点击仍不支持冷启动恢复。
+
+完整 `npm test` 已通过：M1 336 项、host 353 项、另有原生助手/容量/生命周期/路由测试。新增页面断言覆盖原生通道不重发 Web 通知、最近三个键、目标/客户端不匹配拒绝、点击只导航一次、关闭自动聚焦仍后台切换、失败单次兜底与卸载。原生测试还在实际 Windows PowerShell 编译并运行助手 EOF 路径，没有弹真实通知。`npm pack --dry-run` 共 28 文件，包含 `.js` 和 `.ps1` 两个助手文件。
+
+安装后正常退出重启，API 读回 desktopNativeNotifications=true、workflowEvents=true、workflowLog=true、sound=false、autoFocus=true。真实 `pharos-workflow-candidate9` 收到 9 条提醒和 1 条静默日志；原生历史自动只剩九验甲、九验丙、九验乙结束三条，均为本应用 Pharos 组、随机短 tag。最后的九验乙 target childId 为 `0dfd7cd2-bbd5-4ad1-aa14-9307b61a9798`，tag 为 `pharos-native-cd3ee74606976a7a6a923a50`。发送后工具观察到 strat 主界面、最小化 DSH，再将 Sourcetree 置于前台；此时系统模式读回 AlarmsOnly，不冒充正常模式。已请求用户点击九验乙正文，窗口恢复与子会话导航尚待核验。
+
+本轮原始 SSE、历史和完整测试日志保存在本机 `C:/Users/cjw-9/.codex/visualizations/2026/10/10/01a1234a-9945-7cd1-a2eb-030b77a5a695/pharos-native-adaptation/`。版本仍为 0.6.3，未发布版本；临时验收开关需最终恢复并读回。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：

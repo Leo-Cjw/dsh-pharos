@@ -36,7 +36,7 @@
   "scripts": {
     "build": "node tools/sync-settings-view.mjs",
     "pretest": "node tools/sync-settings-view.mjs",
-    "test": "node test/smoke.mjs && node test/host.test.mjs",
+    "test": "node test/smoke.mjs && node test/host.test.mjs && node test/windows-notifications.test.mjs",
     "prepublishOnly": "npm test"
   },
   "keywords": [

@@ -2109,6 +2109,40 @@ if (!m1Ready) {
     m1a(typeof wireEvent === 'string' && es?.namedListeners?.has(wireEvent), `契约锁：client 注册的事件名与 host 写出的一致（${wireEvent}）`);
   }
 
+  // Native Windows activation survives a toast timeout and must use the original child ID.
+  {
+    localStorage.removeItem('dshPharos.config');
+    const posts=[];let failNative=false;
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url.endsWith('/config'))return {ok:true,json:async()=>({desktopNativeNotifications:true})};
+      posts.push({url,opts});
+      return {ok:!failNative,json:async()=>({requested:true,id:'native-'+posts.length})};
+    }});
+    const app=m1Apply(r,{extraRows:{'native-child':{id:'native-child'}}});
+    await m1Wait(20);const api=r.context.window.__dshPharos,es=r.ES.instances.at(-1);
+    m1a(api.debug().desktopNativeNotifications===true,'Windows native capability comes from the host');
+    for(let i=0;i<5;i++)es.dispatch(m1Frame('workflow','native-child','native-'+i,{dedupeKey:'native-'+i}),'pharos');
+    await m1Wait(30);
+    m1a(r.bag.notifications.length===0 && posts.filter(p=>p.opts.method==='POST').length===5,'native Windows uses the host, without Web Notification duplicates');
+    m1a(api.debug().nativeNotifications.length===3,'native client keeps the latest three workflow activation keys');
+    const payload=JSON.parse(posts.filter(p=>p.url.endsWith('native-notifications')).at(-1).opts.body);
+    const activation={kind:'native-notification',action:'activated',clientId:payload.clientId,key:payload.key,sessionId:payload.sessionId,autoFocus:true};
+    es.dispatch({...activation,clientId:'wrong-client'},'pharos');es.dispatch({...activation,sessionId:'wrong-target'},'pharos');
+    m1a(r.bag.opened.length===0,'native activation ignores another renderer or a mismatched target');
+    es.dispatch(activation,'pharos');es.dispatch(activation,'pharos');await m1Wait(15);
+    m1a(r.bag.opened.filter(x=>x[0]==='uiWorkspace.openSession'&&x[1]==='native-child').length===1,'native activation navigates once to the original child');
+    m1a(posts.some(p=>p.url.endsWith('/desktop-focus')),'native activation requests minimized Windows restoration');
+    const beforeFocus=posts.filter(p=>p.url.endsWith('/desktop-focus')).length;
+    api.setConfig({autoFocus:false});es.dispatch(m1Frame('remote','B','background native'),'pharos');await m1Wait(20);
+    const background=JSON.parse(posts.filter(p=>p.url.endsWith('native-notifications')).at(-1).opts.body);
+    es.dispatch({kind:'native-notification',action:'activated',clientId:background.clientId,key:background.key,sessionId:'B',autoFocus:false},'pharos');await m1Wait(15);
+    m1a(r.bag.opened.some(x=>x[0]==='uiWorkspace.openSession'&&x[1]==='B')&&posts.filter(p=>p.url.endsWith('/desktop-focus')).length===beforeFocus,'autoFocus off keeps native navigation in the background');
+    failNative=true;const beforeDom=toastCount(r);es.dispatch(m1Frame('error','B','native failed'),'pharos');await m1Wait(30);
+    m1a(toastCount(r)===beforeDom+1&&r.bag.notifications.length===0,'native failure adds one page fallback without retrying a Web notification');
+    app.teardown();await m1Wait(20);
+    m1a(posts.some(p=>p.opts.method==='DELETE')&&api.debug().nativeNotifications.length===0,'native teardown releases only its client entries');
+  }
+
   // ---- M2-A: test(kind, stats) 扩展 + stats() 访问器 + localStorage 兜底 ----
   {
     localStorage.removeItem('dshPharos.config');
