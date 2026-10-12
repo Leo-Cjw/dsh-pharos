@@ -18,16 +18,27 @@ public class PharosToastEvents {
   var thread = new Thread(() => { try { string line; while ((line=Console.ReadLine())!=null) Input.Enqueue(line); } finally { Ended=true; } });
   thread.IsBackground=true; thread.Start();
  }
- public static void Activated(object sender, object args) { Events.Enqueue("activated:"+sender.GetType().GetProperty("Tag").GetValue(sender,null)); }
- public static void Dismissed(object sender, object args) {
-  if(args.GetType().GetProperty("Reason").GetValue(args,null).ToString()=="UserCanceled") Events.Enqueue("closed:"+sender.GetType().GetProperty("Tag").GetValue(sender,null));
- }
- public static void Failed(object sender, object args) { Events.Enqueue("failed:"+sender.GetType().GetProperty("Tag").GetValue(sender,null)); }
- public static void Attach(object toast, string name) {
+ public static System.Collections.Generic.Dictionary<string,System.Collections.Generic.List<object>> Roots = new System.Collections.Generic.Dictionary<string,System.Collections.Generic.List<object>>();
+ public static void Attach(object toast, string name, string id) {
+  var sink=new PharosToastSink(id);
   var add=toast.GetType().GetMethod("add_"+name);
-  var callback=Delegate.CreateDelegate(add.GetParameters()[0].ParameterType,typeof(PharosToastEvents).GetMethod(name));
+  var callback=Delegate.CreateDelegate(add.GetParameters()[0].ParameterType,sink,typeof(PharosToastSink).GetMethod(name));
   add.Invoke(toast,new object[]{callback});
+  if(!Roots.ContainsKey(id)) Roots[id]=new System.Collections.Generic.List<object>();
+  Roots[id].Add(sink); Roots[id].Add(callback);
  }
+ public static void Forget(string id) { Roots.Remove(id); }
+}
+public class PharosToastSink {
+ private readonly string Id;
+ public PharosToastSink(string id) { Id=id; }
+ public void Activated(object sender, object args) { PharosToastEvents.Events.Enqueue("activated:"+Id); }
+ public void Dismissed(object sender, object args) {
+  var reason=args.GetType().GetProperty("Reason").GetValue(args,null).ToString();
+  PharosToastEvents.Events.Enqueue("dismissed:"+Id+":"+reason);
+  if(reason=="UserCanceled") PharosToastEvents.Events.Enqueue("closed:"+Id);
+ }
+ public void Failed(object sender, object args) { PharosToastEvents.Events.Enqueue("failed:"+Id); }
 }
 '@
 $appId='electron.app.DeepSeek Harness'
@@ -37,6 +48,7 @@ $toasts=@{}
 function Reply($value) { [Console]::Out.WriteLine(($value|ConvertTo-Json -Compress)); [Console]::Out.Flush() }
 function RemoveToast([string]$id) {
  if($toasts.ContainsKey($id)) { $notifier.Hide($toasts[$id]); $toasts.Remove($id) }
+ [PharosToastEvents]::Forget($id)
  $history.Remove($id,'Pharos',$appId)
  foreach($entry in $history.GetHistory($appId)) {
   if($entry.Group -ceq 'Pharos' -and $entry.Tag -ceq $id) { throw 'native history removal failed' }
@@ -60,9 +72,9 @@ try {
      $toast=[Windows.UI.Notifications.ToastNotification]::new($xml)
      $toast.Tag=$command.id; $toast.Group='Pharos'
      # Keep the object/delegate after Dismissed/TimedOut. Action Center can still activate it.
-     [PharosToastEvents]::Attach($toast,'Activated')
-     [PharosToastEvents]::Attach($toast,'Dismissed')
-     [PharosToastEvents]::Attach($toast,'Failed')
+     [PharosToastEvents]::Attach($toast,'Activated',$command.id)
+     [PharosToastEvents]::Attach($toast,'Dismissed',$command.id)
+     [PharosToastEvents]::Attach($toast,'Failed',$command.id)
      $toasts[$command.id]=$toast
      $notifier.Show($toast)
     } elseif($command.op -ceq 'remove') { RemoveToast $command.id }
@@ -72,8 +84,8 @@ try {
   }
   $event=$null
   while([PharosToastEvents]::Events.TryDequeue([ref]$event)) {
-   $parts=$event.Split(':',2); $id=$parts[1]
-   if($toasts.ContainsKey($id)) { Reply @{event=$parts[0];id=$id} }
+   $parts=$event.Split(':',3); $id=$parts[1]
+   if($toasts.ContainsKey($id)) { Reply @{event=$parts[0];id=$id;reason=$parts[2]} }
   }
   Start-Sleep -Milliseconds 40
  }

@@ -226,6 +226,12 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 第九轮首次点击后，用户反馈 DSH 弹出但仍是 strat。读取窗口标题确认为 strat；Debug 为 navLog=[]、desktopNativeNotifications=true、三个 nativeNotifications 仍在且目标映射正确，系统历史同样仍为 3 条。未进入插件导航，不能先归因于 childId 的会话可达性闸门，也不能确定这次实际激活的对象。记录已保存为上述目录的 `candidate9-after-click.txt`。为核验确切单条入口，先保存容量证据，再只删除甲/丙两条本轮测试历史，读回只剩乙；保留同一进程，关闭设置、复查 strat、最小化并切到 Sourcetree，请用户再次点击乙正文。人工删减仅用于点击对照，不作为自动容量通过证据。
 
+第九轮单条复查用户仍反馈窗口恢复、停留 strat；只读标题仍为 strat，九验乙历史仍为 1 条，系统模式为 Unrestricted。不能认定指定原生 Activated 已到达，更不能将窗口恢复当成会话跳转。没有继续要求重复点击同一条。随后正常退出旧宿主，确认助手进程结束；该条历史仍存在，已按精确 tag 清理，不将卸载视作历史必然清空。
+
+后续诊断候选为每条通知显式持有独立 sink 和委托，回调使用绑定的原始 native ID；这属于生命周期加强，未证明此前是 GC 导致丢失。新增受同一来源围栏保护的 `GET /pharos/api/native-notifications`（需要 x-pharos-desktop:1），只提供助手 PID、pending/entries 数量和最近 20 条原生 ack/dismissed/activated 事件及关闭原因，不返回正文、密钥或完整会话 ID。接口请求的多余字段不会覆盖内部 event/id/retired 状态。
+
+正常启动该候选后，用普通 remote 通知“原生链路定位10”验证已知主会话目标 `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc`；发出前工具确认 strat、最小化、Sourcetree 前台。原生助手明确记录 show ack，62 毫秒后收到同 ID 的 dismissed/TimedOut，证明关闭回调到 host 的传输可用；窗口系统模式此时为 AlarmsOnly，保留一个入口。已请求用户点击新通知，独立 SSE 观察连接同时保留；Activated 与主会话跳转尚待结果。关闭/激活链路不可用的确切原因仍未确认。该候选完整测试仍为 M1 336 项、host 353 项及原生助手测试通过；新增内部字段边界的测试也通过。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：

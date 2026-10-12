@@ -35,7 +35,7 @@ function transport(){
 }
 {
  const t=transport(),events=[],b=createWindowsNotificationBroker({platform:'win32',launch:t.launch,onEvent:e=>events.push(e)});
- const shown=await b.show(fixture);t.emit('closed',shown.id);await wait(10);
+ const shown=await b.show({...fixture,event:'activated',retired:true,id:'forged'});t.emit('closed',shown.id);await wait(10);
  assert.equal(b.size(),0);assert.equal(events[0].event,'closed');b.dispose();
 }
 {
@@ -69,7 +69,8 @@ function transport(){
  assert.equal((await request('POST',fixture,{origin:'https://evil.test'})).status,403);
  assert.equal((await request('POST',fixture,{'x-pharos-desktop':''})).status,403);
  assert.equal((await request('POST',{...fixture,sessionId:''})).status,400);
- assert.equal((await request('GET',fixture)).status,405);
+ assert.equal((await request('PATCH',fixture)).status,405);
+ assert.equal((await request('GET',fixture)).status,200);
  config.enabled=false;assert.equal(JSON.parse((await request('POST',fixture)).text).requested,false);assert.equal(shown,1);
  config.enabled=true;config.autoFocus=false;
  const req=new EventEmitter();Object.assign(req,{method:'GET',url:'/pharos/api/stream',remoteAddress:'127.0.0.1',headers:{host:'localhost:1234'}});
