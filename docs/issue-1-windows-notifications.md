@@ -224,6 +224,8 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 本轮原始 SSE、历史和完整测试日志保存在本机 `C:/Users/cjw-9/.codex/visualizations/2026/10/10/01a1234a-9945-7cd1-a2eb-030b77a5a695/pharos-native-adaptation/`。版本仍为 0.6.3，未发布版本；临时验收开关需最终恢复并读回。
 
+第九轮首次点击后，用户反馈 DSH 弹出但仍是 strat。读取窗口标题确认为 strat；Debug 为 navLog=[]、desktopNativeNotifications=true、三个 nativeNotifications 仍在且目标映射正确，系统历史同样仍为 3 条。未进入插件导航，不能先归因于 childId 的会话可达性闸门，也不能确定这次实际激活的对象。记录已保存为上述目录的 `candidate9-after-click.txt`。为核验确切单条入口，先保存容量证据，再只删除甲/丙两条本轮测试历史，读回只剩乙；保留同一进程，关闭设置、复查 strat、最小化并切到 Sourcetree，请用户再次点击乙正文。人工删减仅用于点击对照，不作为自动容量通过证据。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：
