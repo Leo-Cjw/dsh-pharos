@@ -200,6 +200,16 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 
 前一轮第七轮消息的实际回复也明确说明 workflow 环境没有 timer API，未执行请求中的 30 秒等待。第七轮曾在发送消息后切换会话和窗口，但不能把请求中的等待当作实际执行证据。第八轮没有再请求计时器或终端命令。独立 SSE 已正常退出，原始证据另存于本机 `C:/Users/cjw-9/.codex/visualizations/2026/10/10/01a1234a-9945-7cd1-a2eb-030b77a5a695/pharos-candidate8/`，避免临时文件被清理。
 
+### 第八轮点击结果与原生回调实验（2026-10-12）
+
+再次解锁后，点击前 Debug 明确为 strat（`session-52766c78-2c8b-4911-9f78-d20217e418ad`）、navLog=[]、autoFocus=true；三个槽位与上述甲乙丙真实 childId 一致，历史清理 pending=0、running=false、failures=0、error=null。关闭设置后再次观察 strat 主界面、最小化 DSH、把 Sourcetree 置于前台，才请求用户点击八验丙结束正文。
+
+用户反馈未恢复前台。手动激活前窗口标题仍为 strat，NotificationMode=Unrestricted，本轮三条历史全部消失。Electron 原生日志在 10:03:16、10:03:20、10:03:22 明确记录三次 `Notification clicked`；日志未输出各次对象 ID，不能确定哪一次对应八验丙。随后手动激活读取 Debug，仍为 strat、navLog=[]、autoFocus=true、清理无错误。因此本轮点击未通过，已经确认原生层实际收到点击，而插件导航没有执行。证据保存在上述 candidate8 目录的 `before-click.txt`、`after-click.txt`、`after-click-native.log`。
+
+继续检查 Electron 的 NonPersistentClick/Close 分发链，判断“原生关闭后 Chromium 删除 Web 点击监听”为源码支持的原因方向。本机仍未直接记录 Chromium 内部监听表。没有继续用新 tag 或调整聚焦方法代替链路修复，也没有把 ServiceWorker 作为已可用方案：所查 Electron 源码明确不支持 persistent notifications。
+
+独立 Windows 原生实验已成功创建 Toast、注册 Activated/Dismissed/Failed，并在 Dismissed 后保留 Activated 委托。它使用系统 Windows PowerShell 的内联代码与内置 .NET 反射，不修改系统执行策略、不注册新协议、不修改 DSH 应用。实验实际记录 `dismissed:pharos-native-probe:TimedOut`，等待人工点击同一条历史通知检验 Activated；当前不计作修复或前台恢复通过。此实验尚未接入插件源码。
+
 ## 再次排查
 
 在“设置 → 消息通知”点击 Debug 刷新，先看 framesReceived/recentFrames，再看 recentNotifications：
