@@ -2,6 +2,24 @@
 
 本文件记录 dsh-pharos 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### 修复
+
+- Windows 系统通知不再传入包含会话 ID 的 `tag`。Electron 把 Chromium 的 `n#origin#tag` 作为 Windows 原生 tag；真实会话 ID 会令它超过 64 字符上限，出现只有插件声音、没有系统通知的情况（[issue #1](https://github.com/Leo-Cjw/dsh-pharos/issues/1)）。去重保留在事件策略层。
+- `completionUnread` 完成信号与 running/SSE 共用完成时机、子代理过滤和节流，防止绕过 off/hidden 策略或重复提醒。隐藏页面同时检查 visibilityState。
+- 接住 Web Notification 的异步 `error`，只补一次页内提示，不重复响铃；通知诊断区分请求、显示回调、失败和静默。设置页明确测试按钮只验证页内提示。
+- 修正 host 测试的 Windows file URL 转换和根路径预期，使完整测试可以在 Windows 运行。
+- Windows Electron 在新 host 支持时使用隐藏的原生 Toast 助手，以独立 AUMID 显示并保持 COM 激活监听，超时后保留一次性随机票据入口。host 按当前自动聚焦开关通过固定 `dsh://open` 恢复窗口，再经 SSE 让原客户端导航；断线重连补交、重复消费拒绝。当前用户仅注册 Pharos 自有 AUMID/CLSID、独立开始菜单快捷方式并缓存激活程序，不修改共享注册表键、DSH 原快捷方式或注册新 URI 协议；不支持退出后冷启动恢复旧会话。macOS 与普通浏览器继续使用原通道；没有新 host 时保留 Web `requireInteraction` 兼容路径。
+- Windows 工作流保留当前客户端最近 3 条入口。每条使用随机短 tag，原始会话 ID 留在 host 映射；淘汰时删除本应用 Pharos 组指定历史并读回，删除失败停止新发送。助手失败只补一次页内提示，不重复发送 Web 通知。SSE/Webhook 原始事件仍完整投递；旧 Web 路径保留独立历史清理及诊断。
+- 控制台 API 版本复用设置页的版本来源，与包版本一致；补齐完成节流抑制不延长窗口、诊断记录及窗口恢复子进程 `unref()` 的回归测试。
+- 设置保存后同步当前窗口运行中的通知配置，修复自动聚焦开关已落盘但通知仍使用旧值的问题，无需重启才能应用。
+- 补齐三条不同目标通知的并发发送、乱序激活、错误目标拒绝及重复消费回归；本机三条通知 C→A→B 点击均对应原始主/子会话，没有错配。
+
+- 修复连续点击通知只闪烁任务栏：每次 COM 回调先核验存活票据和自动聚焦开关，向已验证身份/启动时间的 DSH 主进程授予前台权限，再消费票据、恢复窗口及导航。关闭自动聚焦或过期票据不授权，授权失败仍保留导航路径；不修改系统前台锁或向所有进程授权。第十九轮 C→A→B 三次均从 Sourcetree 自动恢复并进入对应主/子会话，用户验收通过。
+
+验证范围与剩余限制见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。本机连续前台恢复与多通知映射均通过，不推广为所有 Windows 版本或系统模式通过。
+
 ## [0.6.3] — 2026-10-09
 
 patch 版：修「点击系统通知只把 DSH 拉到前台、不跳到该会话页」。此前该能力从 v0.3 起就从未真正生效。

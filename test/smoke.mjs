@@ -153,6 +153,7 @@ function reload(overrides = {}) {
     get title() { return bag.title; }, set title(v) { bag.title = v; },
     documentElement: { lang: overrides.lang ?? 'zh-CN' },
     hasFocus: () => bag.pageFocus,
+    get visibilityState() { return bag.visibilityState ?? 'visible'; },
     body: global.document.body, // 复用同一 DOM stub 容器（toast box 同源可查）
     createElement: global.document.createElement,
     getElementById: global.document.getElementById,
@@ -175,6 +176,30 @@ function reload(overrides = {}) {
       createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
     }
   };
+  // Electron Windows: Chromium 用 origin + tag/token 生成原生 Tag；
+  // 原生失败不一定回传 Web Notification error，所以只模拟成功 show。
+  function recordNativeAttempt(n, title, o) {
+    if (!bag.nativeTagLimit) return;
+    const nativeTag = `n#dsh-app://app#${o.tag || String(bag.notifications.length).padStart(32, '0')}`;
+    bag.nativeAttempts ??= [];
+    bag.nativeAttempts.push({ nativeTag, title, shown: nativeTag.length <= bag.nativeTagLimit });
+    if (nativeTag.length <= bag.nativeTagLimit) {
+      bag.nativeHistory ??= new Map();
+      bag.nativeClickListeners ??= new Map();
+      const previous = bag.nativeHistory.get(nativeTag);
+      n.nativeTag = nativeTag;
+      bag.nativeClickListeners.set(nativeTag, n);
+      bag.nativeHistory.set(nativeTag, { n, title, body: o.body });
+      queueMicrotask(() => n.onshow?.({}));
+      // Electron closes the old native object after Chromium registered the new
+      // listener under the same ID. Its delayed close can invalidate that ID.
+      if (previous) queueMicrotask(() => {
+        const current = bag.nativeClickListeners.get(nativeTag);
+        if (current) { current.closed = true; current.onclose?.(); }
+        bag.nativeClickListeners.delete(nativeTag);
+      });
+    }
+  }
   // 双形态 Notification mock（与文件头的基线 mock 同构）：默认 electron 形态
   // （on/once/show，点击走 on('click')）；notificationStyle:'web' 切换为标准 Web API
   // （只有 onclick）。生产代码两条路都挂，故两种环境都要覆盖。
@@ -186,28 +211,40 @@ function reload(overrides = {}) {
       // 没有 on()/show()。用于锁住「onclick 那一路不能被删」。
       return class {
         constructor(title, o) {
+          if (bag.notificationThrows) throw new Error('notification constructor failed');
           this.title = title; this.opts = o; this.onclick = null;
-          bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: () => { if (typeof this.onclick === 'function') this.onclick(); } });
+          let listenerActive = true;
+          bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: (event = 'click') => {
+            // Electron 的默认横幅超时派发 Web close；Chromium 会移除监听，
+            // 通知中心的后续 click 无法回到 renderer。reminder 不自动超时。
+            if (event === 'timeout') { if (!o.requireInteraction) listenerActive = false; return; }
+            if (event === 'click' && listenerActive && !this.closed &&
+                (!this.nativeTag || bag.nativeClickListeners.get(this.nativeTag) === this) && typeof this.onclick === 'function') this.onclick();
+          } });
+          recordNativeAttempt(this, title, o);
         }
-        close() {}
+        // 与实机一致：Web close 仅隐藏横幅，历史不因此删除；同 tag 替换才收口历史。
+        close() { this.closeCalls = (this.closeCalls ?? 0) + 1; this.closed = true; this.onclose?.(); }
         static get permission() { return bag.notifPerm; }
         static requestPermission() { return Promise.resolve(bag.notifPerm); }
       };
     }
     return class {
       constructor(title, o) {
+        if (bag.notificationThrows) throw new Error('notification constructor failed');
         this.title = title; this.opts = o; this.shown = false;
         this._handlers = new Map();
         const self = this;
         // 同上：点击只派发 on('click')，不回落 onclick
         bag.notifications.push({ n: this, title, body: o.body, tag: o.tag, fire: (ev) => {
-          for (const fn of [...(self._handlers.get(ev) ?? [])]) fn();
+          if (!self.closed && (!self.nativeTag || bag.nativeClickListeners.get(self.nativeTag) === self))
+            for (const fn of [...(self._handlers.get(ev) ?? [])]) fn();
         } });
       }
       on(ev, fn) { const a = this._handlers.get(ev) ?? []; a.push(fn); this._handlers.set(ev, a); return this; }
       once(ev, fn) { return this.on(ev, fn); }
-      show() { this.shown = true; }
-      close() {}
+      show() { this.shown = true; recordNativeAttempt(this, this.title, this.opts); for (const fn of [...(this._handlers.get('show') ?? [])]) fn(); }
+      close() { this.closeCalls = (this.closeCalls ?? 0) + 1; this.closed = true; for (const fn of [...(this._handlers.get('close') ?? [])]) fn(); }
       static get permission() { return bag.notifPerm; }
       static requestPermission() { return Promise.resolve(bag.notifPerm); }
     };
@@ -217,7 +254,7 @@ function reload(overrides = {}) {
   const ctxObj = {
     window: win, document: doc, Notification: NotificationCls, EventSource: ESCls,
     fetch: overrides.fetch ?? global.fetch,
-    navigator: { language: 'zh-CN', locks: overrides.noLocks ? null : { request: async (_n, cb) => cb() } },
+    navigator: { language: 'zh-CN', userAgent: overrides.userAgent ?? '', locks: overrides.noLocks ? null : { request: async (_n, cb) => cb() } },
     console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
     Promise, Math, JSON, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, WeakMap, WeakSet,
     Uint8Array, TextEncoder, Blob, URL, URLSearchParams,
@@ -316,7 +353,8 @@ const count = (title) => notifications.filter((x) => x.title === title).length;
 
 apply(ctx);
 console.log('bundle name/inject:', name, JSON.stringify(inject));
-assert(window.__dshPharos?.version === '0.6.1', '控制台 API 更名为 __dshPharos v0.6.1');
+assert(window.__dshPharos?.version === JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
+  '控制台 API 版本与 package.json 一致，复用设置页的版本来源');
 
 // baseline
 assert(notifications.length === 0, '基线不弹');
@@ -658,6 +696,7 @@ function m1Apply(r, { extraRows = {}, noUiWorkspace = false, noWorkspaces = fals
     uiWorkspace: noUiWorkspace ? null : uiWorkspace,
     workspaces: noWorkspaces ? null : workspaces,
   };
+  const effectDisposers = [];
   const ctxObj = {
     get: (s, strict = true) => {
       const impl = svcMap[s];
@@ -665,7 +704,7 @@ function m1Apply(r, { extraRows = {}, noUiWorkspace = false, noWorkspaces = fals
       if (strict && !active.has(s)) return undefined;
       return impl;
     },
-    sessions, uiSession, effect: () => {}
+    sessions, uiSession, effect: (fn) => { const dispose = fn(); if (typeof dispose === 'function') effectDisposers.push(dispose); }
   };
   r.bundle.apply(ctxObj);
   const setCurrent = (k) => { uiSession.current.value = { get key() { return k; } }; };
@@ -674,7 +713,9 @@ function m1Apply(r, { extraRows = {}, noUiWorkspace = false, noWorkspaces = fals
   // 替换服务**实例**（cordis 重启/重建服务会产生新对象，旧引用不会自动升级）——
   // 这是缺陷 1 能被真正测到的关键。
   const replaceService = (s, impl) => { svcMap[s] = impl; };
-  return { sessions, uiWorkspace, workspaces, archivedSessionIds, ctxObj, activate, deactivate, replaceService, setCurrent, status, subs: [...subs], tick: () => { for (const s of [...subs]) s(); } };
+  return { sessions, uiWorkspace, workspaces, archivedSessionIds, ctxObj, activate, deactivate, replaceService, setCurrent, status, subs: [...subs],
+    teardown: () => { for (const dispose of effectDisposers.splice(0).reverse()) dispose(); },
+    tick: () => { for (const s of [...subs]) s(); } };
 }
 const m1Frame = (kind, sessionId, note, extra = {}) => ({
   kind, severity: { done: 'info', error: 'error', interrupted: 'warn', limit: 'error', job: 'info', remote: 'info', test: 'info' }[kind],
@@ -1005,6 +1046,307 @@ if (!m1Ready) {
       '设置页「完成」提醒时机下拉含 off/hidden/always 三档');
     m1a(codeOnly.includes('patchConfig({ doneNotifyMode: v, doneHiddenOnly: v !== "always" })'),
       '下拉同时写 doneHiddenOnly（旧主机侧/旧版本仍能读）');
+  }
+
+  // Issue #1: unread 与 running/SSE 共用门控；构造成功不等于通知已显示。
+  {
+    for (const [mode, focused, visible, expected] of [
+      ['off', false, 'visible', 0], ['hidden', true, 'visible', 0],
+      ['hidden', false, 'visible', 1], ['always', true, 'visible', 1],
+      ['hidden', true, 'hidden', 1],
+    ]) {
+      localStorage.removeItem('dshPharos.config');
+      const r = m1Reload({ bag: { pageFocus: focused, visibilityState: visible } });
+      const ui = m1Apply(r);
+      const api = r.context.window.__dshPharos;
+      api.setConfig({ doneNotifyMode: mode });
+      ui.status.set('U1', { running: true, completionUnread: false }); ui.tick();
+      ui.status.set('U1', { running: false, completionUnread: true }); ui.tick();
+      m1a(r.bag.notifications.length === expected,
+        `unread 完成遵守 ${mode} / focused=${focused} / ${visible}`);
+      if (expected) {
+        r.ES.instances.at(-1).dispatch(m1Frame('done', 'U1', 'same turn'), 'pharos');
+        await m1Wait(10);
+        m1a(r.bag.notifications.length === 1, 'unread 在先、SSE 在后：同会话只提醒一次');
+      }
+    }
+    // SSE 在先、unread 在后（用新的会话避开上一组节流）。
+    localStorage.removeItem('dshPharos.config');
+    const r = m1Reload({ bag: { pageFocus: false }, notificationStyle: 'web' });
+    const ui = m1Apply(r);
+    const api = r.context.window.__dshPharos;
+    const es = r.ES.instances.at(-1);
+    es.dispatch(m1Frame('done', 'U2', ''), 'pharos'); await m1Wait(10);
+    ui.status.set('U2', { running: false, completionUnread: true }); ui.tick();
+    m1a(r.bag.notifications.length === 1, 'SSE 在先、unread 在后：同会话只提醒一次');
+
+    es.dispatch(m1Frame('error', 'N1', ''), 'pharos'); await m1Wait(10);
+    const n = r.bag.notifications.at(-1).n;
+    const beforeToast = toastCount(r), beforeSound = r.bag.audioCtx;
+    m1a(api.debug().recentNotifications?.at(-1)?.result === 'requested',
+      'Notification 构造后仅记录 requested，不误报已显示');
+    n.onerror?.({}); n.onerror?.({});
+    m1a(toastCount(r) === beforeToast + 1, '异步 error 只补一条页内提示');
+    m1a(r.bag.audioCtx === beforeSound, '异步失败兜底不重复播放声音');
+    m1a(api.debug().recentNotifications?.at(-1)?.result === 'error', 'debug 记录异步发送失败');
+    n.onshow?.({});
+    m1a(api.debug().recentNotifications?.at(-1)?.result === 'error', '迟到的 show 不覆盖失败状态');
+
+    es.dispatch(m1Frame('remote', 'N2', ''), 'pharos'); await m1Wait(10);
+    r.bag.notifications.at(-1).n.onshow?.({});
+    m1a(api.debug().recentNotifications?.at(-1)?.result === 'shown', '收到 show 才记录 shown');
+    api.setConfig({ minIntervalMs: 0 });
+    ui.status.set('U3', { running: false, completionUnread: true }); ui.tick();
+    ui.status.set('U3', { running: true, completionUnread: false }); ui.tick();
+    ui.status.set('U3', { running: false, completionUnread: true }); ui.tick();
+    m1a(r.bag.notifications.every((x) => x.tag === undefined),
+      '不把会话 ID 写入系统通知 tag，避免 Electron Windows 原生 tag 超长');
+
+    const longSid = 'session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    for (const kind of ['done', 'error', 'interrupted', 'limit', 'job', 'remote', 'workflow']) {
+      api.setConfig({ workflowEvents: true });
+      const before = r.bag.notifications.length;
+      es.dispatch(m1Frame(kind, longSid, '', { dedupeKey: `long-${kind}` }), 'pharos');
+      await m1Wait(10);
+      m1a(r.bag.notifications.length === before + 1 && r.bag.notifications.at(-1)?.n.opts.tag === undefined,
+        `长会话 ${kind} 实际投递且不传 tag`);
+    }
+    const beforeAttention = r.bag.notifications.length;
+    ui.status.set(longSid, { running: false, pendingInteraction: { kind: 'question', key: 'tag-check' } }); ui.tick();
+    m1a(r.bag.notifications.length === beforeAttention + 1 && r.bag.notifications.at(-1)?.n.opts.tag === undefined,
+      '长会话 attention 实际投递且不传 tag');
+
+    es.dispatch(m1Frame('error', 'N3', ''), 'pharos'); await m1Wait(10);
+    const disabledN = r.bag.notifications.at(-1).n;
+    api.setConfig({ enabled: false });
+    const disabledToast = toastCount(r);
+    disabledN.onerror?.({});
+    m1a(toastCount(r) === disabledToast, '关闭主开关后迟到的 error 不再补弹');
+
+    api.setConfig({ enabled: true });
+    r.bag.notificationThrows = true;
+    const thrownToast = toastCount(r);
+    es.dispatch(m1Frame('error', 'N4', ''), 'pharos'); await m1Wait(10);
+    m1a(toastCount(r) === thrownToast + 1, '构造抛异常仍走页内兜底');
+    m1a(api.debug().recentNotifications?.at(-1)?.result === 'constructor-error', 'debug 区分构造失败');
+    r.bag.notificationThrows = false;
+    for (let i = 0; i < 25; i++) {
+      es.dispatch(m1Frame('remote', `RING-${i}`, ''), 'pharos');
+    }
+    await m1Wait(10);
+    m1a(api.debug().recentNotifications?.length === 20, '通知诊断队列有界，保留最近 20 条');
+  }
+
+  // 被抑制的完成事件不能移动节流起点，否则繁忙会话会被无限期抑制。
+  {
+    localStorage.removeItem('dshPharos.config');
+    let now = 1700000000000;
+    class Clock extends Date { static now() { return now; } }
+    const r = m1Reload({ bag: { pageFocus: false }, DateCtor: Clock, notificationStyle: 'web' });
+    m1Apply(r);
+    const api = r.context.window.__dshPharos;
+    const es = r.ES.instances.at(-1);
+    api.setConfig({ minIntervalMs: 6000 });
+    es.dispatch(m1Frame('done', 'THROTTLE', '', { dedupeKey: 'throttle-first' }), 'pharos'); await m1Wait(10);
+    now += 4000;
+    es.dispatch(m1Frame('done', 'THROTTLE', '', { dedupeKey: 'throttle-suppressed' }), 'pharos'); await m1Wait(10);
+    const suppressed = api.debug().recentNotifications.at(-1);
+    m1a(r.bag.notifications.length === 1, '节流窗口内的完成不重复通知');
+    m1a(suppressed.kind === 'done' && suppressed.sessionId === 'THROTTLE' && suppressed.source === 'sse'
+      && suppressed.result === 'suppressed' && suppressed.reason === 'throttled' && suppressed.ts === now,
+      'Debug 准确记录被节流的完成及其来源、原因和时间');
+    now += 2000;
+    es.dispatch(m1Frame('done', 'THROTTLE', '', { dedupeKey: 'throttle-boundary' }), 'pharos'); await m1Wait(10);
+    m1a(r.bag.notifications.length === 2 && api.debug().recentNotifications.at(-1).result === 'requested',
+      '首次投递满 6s 即可再通知，抑制事件不延长节流窗口');
+  }
+
+  // Windows 原生 tag 长度回归：构造都成功，但旧 tag 的长会话不会触发 show。
+  {
+    localStorage.removeItem('dshPharos.config');
+    const focusRequests = [];
+    const r = m1Reload({ bag: { pageFocus: false, nativeTagLimit: 64 }, notificationStyle: 'web', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Electron/44.0.0', fetch: async (url, opts) => {
+      if (url === '/pharos/api/desktop-focus') { focusRequests.push(opts); return { ok: true, status: 200 }; }
+      return global.fetch(url, opts);
+    } });
+    const sid = 'session-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const ui = m1Apply(r, { extraRows: { [sid]: { id: sid, displayTitle: 'Windows 长 ID 会话' } } });
+    const api = r.context.window.__dshPharos;
+    const es = r.ES.instances.at(-1);
+    api.setConfig({ workflowEvents: true });
+    // 校准模型：旧实现的短 ID 可显示，长 ID 不显示。
+    new r.context.Notification('short control', { tag: 'dsh-pharos::remote' });
+    new r.context.Notification('long control', { tag: `dsh-pharos:${sid}:done` });
+    await m1Wait(10);
+    m1a(r.bag.nativeAttempts[0].shown && !r.bag.nativeAttempts[1].shown,
+      'Windows 模型复现短 ID 成功、真实长度 ID 构造成功但不能显示');
+    let expiredControlClick = false;
+    const expiredControl = r.bag.notifications[0];
+    expiredControl.n.onclick = () => { expiredControlClick = true; };
+    expiredControl.fire('timeout'); expiredControl.fire('click');
+    m1a(!expiredControlClick, 'Windows 默认横幅超时后通知中心点击失去回调');
+    for (const kind of ['done', 'error', 'interrupted', 'limit', 'job', 'remote', 'workflow']) {
+      es.dispatch(m1Frame(kind, sid, '', { dedupeKey: `native-${kind}` }), 'pharos');
+      await m1Wait(10);
+      const last = api.debug().recentNotifications.at(-1);
+      m1a(last?.kind === kind && last.result === 'shown', `Windows 长会话 ${kind} 收到 show`);
+      const beforeClick = r.bag.opened.length;
+      r.bag.notifications.at(-1).fire('timeout');
+      r.bag.notifications.at(-1).fire('click');
+      m1a(r.bag.opened.length === beforeClick + 1 && r.bag.opened.at(-1)[0] === 'uiWorkspace.openSession' && r.bag.opened.at(-1)[1] === sid,
+        `Windows 长会话 ${kind} 点击通过 Web onclick 切到目标会话`);
+    }
+    ui.status.set(sid, { running: false, pendingInteraction: { kind: 'question', key: 'native-question' } }); ui.tick();
+    await m1Wait(10);
+    const attention = api.debug().recentNotifications.at(-1);
+    m1a(attention?.kind === 'attention' && attention.result === 'shown', 'Windows 长会话需要操作收到 show');
+    const beforeAttentionClick = r.bag.opened.length;
+    r.bag.notifications.at(-1).fire('timeout');
+    r.bag.notifications.at(-1).fire('click');
+    m1a(r.bag.opened.length === beforeAttentionClick + 1 && r.bag.opened.at(-1)[0] === 'uiWorkspace.openSession' && r.bag.opened.at(-1)[1] === sid,
+      'Windows 长会话需要操作点击通过 Web onclick 切到目标会话');
+    m1a(focusRequests.length === 8 && focusRequests.every(o => o.method === 'POST' && o.headers['x-pharos-desktop'] === '1'),
+      'Windows 每次点击请求宿主恢复窗口，仅投递通知不恢复');
+    api.setConfig({ autoFocus: false });
+    es.dispatch(m1Frame('remote', sid, '', { dedupeKey: 'no-focus' }), 'pharos'); await m1Wait(10);
+    const beforeNoFocus = r.bag.opened.length;
+    r.bag.notifications.at(-1).fire('click');
+    m1a(focusRequests.length === 8 && r.bag.opened.length === beforeNoFocus + 1, '关闭自动聚焦仍切会话但不请求窗口恢复');
+  }
+
+  // Windows 工作流用唯一短 tag 保留监听，原生 History.Remove 才真正清理历史。
+  for (const notificationStyle of ['web', 'electron']) {
+    localStorage.removeItem('dshPharos.config');
+    const focusRequests = [];
+    const r = m1Reload({ notificationStyle, bag: { pageFocus: false, nativeTagLimit: 64 },
+      userAgent: 'Windows NT Electron/44.0.0', fetch: async (url, opts) => {
+        if (url === '/pharos/api/desktop-focus') { focusRequests.push(opts); return { ok: true, status: 200 }; }
+        if (url === '/pharos/api/workflow-history') {
+          for (const tag of JSON.parse(opts.body).tags) r.bag.nativeHistory.delete('n#dsh-app://app#' + tag);
+          return { ok: true, json: async () => ({ removed: true }) };
+        }
+        return global.fetch(url, opts);
+      } });
+    const ids = Array.from({length:9}, (_, i) => 'session-aaaaaaaa-bbbb-cccc-dddd-' + String(i).padStart(12,'0'));
+    const ui = m1Apply(r, { extraRows: Object.fromEntries(ids.map(id => [id,{id,displayTitle:id}])) });
+    const api = r.context.window.__dshPharos;
+    const es = r.ES.instances.at(-1);
+    es.dispatch(m1Frame('error', 'E1', '重要错误'), 'pharos'); await m1Wait(10);
+    const critical = r.bag.notifications[0];
+    for (let i=0;i<9;i++) {
+      es.dispatch(m1Frame('workflow',ids[i],'进展 '+i,{dedupeKey:'workflow-'+i,sessionTitle:'同一个工作流'}),'pharos');
+      await m1Wait(10);
+    }
+    const progress=r.bag.notifications.slice(1);
+    await m1Wait(220);
+    m1a(progress.length===9 && api.debug().recentFrames.filter(f=>f.kind==='workflow').length===9,
+      notificationStyle+': 全部工作流事件仍送达，不在 SSE 层丢事件');
+    const history=[...r.bag.nativeHistory.values()];
+    m1a(history.length===4 && history.filter(x=>x!==critical && x.title===progress[0].title).length===3 &&
+      history.slice(1).map(x=>x.body).join(',')===progress.slice(6).map(x=>x.body).join(','),
+      notificationStyle+': 原生历史保留最近 3 条进展以及原有错误通知');
+    m1a(progress.every(x=>x.n.opts.requireInteraction && /^pharos-wf-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/.test(x.tag)) &&
+      new Set(progress.map(x=>x.tag)).size === 9 &&
+      r.bag.nativeAttempts.every(x=>x.shown && x.nativeTag.length<=64),
+      notificationStyle+': 长会话使用唯一短 tag，原生标识不超长，也不复用点击监听 ID');
+    m1a(progress.slice(0,6).every(x=>x.n.closed) && progress.slice(6).every(x=>!x.n.closed) && !critical.n.closed,
+      notificationStyle+': 关闭已淘汰对象不会关闭最新三条或普通通知');
+    m1a(api.debug().workflowHistoryCleanup.pending===0 && api.debug().workflowHistoryCleanup.error===null,
+      notificationStyle+': 原生历史清理已确认成功，不只检查 JS 集合大小');
+    m1a(api.debug().workflowNotificationSlots.map(x=>x.sessionId).join(',')===ids.slice(6).join(','),
+      notificationStyle+': Debug 槽位指向各 tag 最近请求的会话');
+    const beforeToast=toastCount(r), beforeNav=r.bag.opened.length;
+    progress[0].n.onerror?.({}); progress[0].n.onclick?.(); progress[0].n.onshow?.();
+    m1a(toastCount(r)===beforeToast && r.bag.opened.length===beforeNav,
+      notificationStyle+': 被替换旧对象的迟到回调不补弹也不跳错会话');
+    for (const x of progress.slice(6)) { x.fire('timeout'); x.fire('click'); }
+    m1a(r.bag.opened.slice(-3).map(x=>x[1]).join(',')===ids.slice(6).join(',') && focusRequests.length===3,
+      notificationStyle+': 三个保留项超时后点击均跳到各自最新会话并请求恢复');
+    ui.teardown();
+    m1a(api.debug().workflowNotificationSlots.length===0 && !critical.n.closed,
+      notificationStyle+': 卸载释放槽位，仅关闭自身工作流对象');
+  }
+
+  // Cleanup failures are visible and retried; a late show needs another removal
+  // even when its original removal request is still in flight.
+  {
+    localStorage.removeItem('dshPharos.config');
+    let calls=0;
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false,nativeTagLimit:64},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url!=='/pharos/api/workflow-history')return global.fetch(url,opts);
+      if(++calls===1)return {ok:false,status:503};
+      for(const tag of JSON.parse(opts.body).tags)r.bag.nativeHistory.delete('n#dsh-app://app#'+tag);
+      return {ok:true,json:async()=>({removed:true})};
+    }});
+    const ui=m1Apply(r),api=r.context.window.__dshPharos,es=r.ES.instances.at(-1);
+    for(let i=0;i<4;i++)es.dispatch(m1Frame('workflow','RETRY-'+i,'',{dedupeKey:'retry-'+i}),'pharos');
+    await m1Wait(150);
+    m1a(api.debug().workflowHistoryCleanup.pending===1 && api.debug().workflowHistoryCleanup.error!==null,
+      '清理失败保留待清理 ID 并在 Debug 明确显示失败');
+    await m1Wait(560);
+    m1a(calls===2 && r.bag.nativeHistory.size===3 && api.debug().workflowHistoryCleanup.pending===0,
+      '原生历史清理失败后重试成功，仍只剩最新三条');ui.teardown();
+  }
+  {
+    localStorage.removeItem('dshPharos.config');
+    let calls=0,release;
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false,nativeTagLimit:64},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url!=='/pharos/api/workflow-history')return global.fetch(url,opts);
+      calls++;
+      for(const tag of JSON.parse(opts.body).tags)r.bag.nativeHistory.delete('n#dsh-app://app#'+tag);
+      if(calls===1)await new Promise(resolve=>{release=resolve;});
+      return {ok:true,json:async()=>({removed:true})};
+    }});
+    const ui=m1Apply(r),api=r.context.window.__dshPharos,es=r.ES.instances.at(-1);
+    for(let i=0;i<4;i++)es.dispatch(m1Frame('workflow','LATE-'+i,'',{dedupeKey:'late-'+i}),'pharos');
+    await m1Wait(150);
+    const old=r.bag.notifications[0];
+    r.bag.nativeHistory.set(old.n.nativeTag,{n:old.n,title:old.title,body:old.body});old.n.onshow();
+    m1a(calls===1 && api.debug().workflowHistoryCleanup.running,'清理串行执行，迟到显示不并发启动第二个请求');
+    release();await m1Wait(160);
+    m1a(calls===2 && !r.bag.nativeHistory.has(old.n.nativeTag) && api.debug().workflowHistoryCleanup.pending===0,
+      '进行中清理后的迟到显示仍再次删除，不被旧请求成功误清待办');
+    ui.teardown();old.n.onshow();await m1Wait(150);
+    m1a(calls===2 && api.debug().workflowHistoryCleanup.pending===0,'卸载后迟到回调不启动新清理请求');
+  }
+
+  // 缺失、乱序显示回调不覆盖入口；构造失败不消耗唯一 ID。
+  {
+    localStorage.removeItem('dshPharos.config');
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0'});
+    const ui=m1Apply(r), api=r.context.window.__dshPharos, es=r.ES.instances.at(-1);
+    for (let i=0;i<4;i++) { es.dispatch(m1Frame('workflow','P-'+i,'',{dedupeKey:'p-'+i}),'pharos'); await m1Wait(10); }
+    m1a(api.debug().workflowNotificationSlots.length===3 && r.bag.notifications.at(-1).tag.endsWith('-3'),
+      '未收到任何 show 回调仍只保留最近 3 条入口');
+    r.bag.notifications[0].n.onshow(); r.bag.notifications.at(-1).n.onshow();
+    m1a(api.debug().recentNotifications[0].result==='requested' && api.debug().recentNotifications.at(-1).result==='shown',
+      '被替换对象的迟到 show 不把旧请求误报成显示成功');
+    r.bag.notificationThrows=true;
+    es.dispatch(m1Frame('workflow','FAIL','',{dedupeKey:'fail'}),'pharos'); await m1Wait(10);
+    m1a(api.debug().workflowNotificationSlots.map(x=>x.sessionId).join(',')==='P-1,P-2,P-3',
+      '构造失败不覆盖既有槽位');
+    r.bag.notificationThrows=false;
+    es.dispatch(m1Frame('workflow','NEXT','',{dedupeKey:'next'}),'pharos'); await m1Wait(10);
+    m1a(r.bag.notifications.at(-1).tag.endsWith('-4'),'构造失败不消耗后续唯一 ID 序号');
+    ui.teardown();
+  }
+
+  // 仅 Windows Electron 改为需用户处理的通知；普通浏览器与其他系统仍按原时机消失。
+  for (const userAgent of ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/152.0.0.0', 'Mozilla/5.0 (Macintosh) Electron/44.0.0']) {
+    localStorage.removeItem('dshPharos.config');
+    const focusRequests = [];
+    const r = m1Reload({ notificationStyle: 'web', userAgent, fetch: async (url, opts) => {
+      if (url === '/pharos/api/desktop-focus') focusRequests.push(opts);
+      return global.fetch(url, opts);
+    } }); m1Apply(r);
+    r.ES.instances.at(-1).dispatch(m1Frame('remote', 'platform-control', ''), 'pharos');
+    await m1Wait(10);
+    m1a(!r.bag.notifications.at(-1).n.opts.requireInteraction, '非 Windows Electron 不延长通知显示时间');
+    r.bag.notifications.at(-1).fire('click');
+    m1a(focusRequests.length === 0, '非 Windows Electron 不调用窗口恢复接口');
+    for (let i = 0; i < 4; i++) { r.ES.instances.at(-1).dispatch(m1Frame('workflow', `OTHER-${i}`, '', { dedupeKey: `other-${i}` }), 'pharos'); await m1Wait(10); }
+    m1a(r.bag.notifications.slice(1).every(x => !x.n.closed && x.tag === undefined) && r.context.window.__dshPharos.debug().workflowNotificationSlots.length === 0,
+      '非 Windows Electron 不应用工作流历史容量规则');
   }
 
   // ---- M1-R: 设置页布局契约锁（v0.6.1 真机截图暴露：标签被 select 挤成竖排）----
@@ -1765,6 +2107,90 @@ if (!m1Ready) {
     const hostSrc = fs.readFileSync(new URL('../lib/host/routes.js', import.meta.url), 'utf8');
     const wireEvent = /event:\s*([A-Za-z0-9_-]+)/.exec(hostSrc)?.[1];
     m1a(typeof wireEvent === 'string' && es?.namedListeners?.has(wireEvent), `契约锁：client 注册的事件名与 host 写出的一致（${wireEvent}）`);
+  }
+
+  // Native Windows activation survives a toast timeout and must use the original child ID.
+  {
+    localStorage.removeItem('dshPharos.config');
+    const posts=[];let failNative=false;
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url.endsWith('/config'))return {ok:true,json:async()=>({desktopNativeNotifications:true})};
+      posts.push({url,opts});
+      return {ok:!failNative,json:async()=>({requested:true,id:'native-'+posts.length})};
+    }});
+    const app=m1Apply(r,{extraRows:{'native-child':{id:'native-child'}}});
+    await m1Wait(20);const api=r.context.window.__dshPharos,es=r.ES.instances.at(-1);
+    m1a(api.debug().desktopNativeNotifications===true,'Windows native capability comes from the host');
+    for(let i=0;i<5;i++)es.dispatch(m1Frame('workflow','native-child','native-'+i,{dedupeKey:'native-'+i}),'pharos');
+    await m1Wait(30);
+    m1a(r.bag.notifications.length===0 && posts.filter(p=>p.opts.method==='POST').length===5,'native Windows uses the host, without Web Notification duplicates');
+    m1a(api.debug().nativeNotifications.length===3,'native client keeps the latest three workflow activation keys');
+    const payload=JSON.parse(posts.filter(p=>p.url.endsWith('native-notifications')).at(-1).opts.body);
+    const activation={kind:'native-notification',action:'activated',clientId:payload.clientId,key:payload.key,sessionId:payload.sessionId,autoFocus:true};
+    es.dispatch({...activation,clientId:'wrong-client'},'pharos');es.dispatch({...activation,sessionId:'wrong-target'},'pharos');
+    m1a(r.bag.opened.length===0,'native activation ignores another renderer or a mismatched target');
+    es.dispatch(activation,'pharos');es.dispatch(activation,'pharos');await m1Wait(15);
+    m1a(r.bag.opened.filter(x=>x[0]==='uiWorkspace.openSession'&&x[1]==='native-child').length===1,'native activation navigates once to the original child');
+    m1a(posts.some(p=>p.url.endsWith('/desktop-focus')),'native activation requests minimized Windows restoration');
+    const beforeFocus=posts.filter(p=>p.url.endsWith('/desktop-focus')).length;
+    api.setConfig({autoFocus:false});es.dispatch(m1Frame('remote','B','background native'),'pharos');await m1Wait(20);
+    const background=JSON.parse(posts.filter(p=>p.url.endsWith('native-notifications')).at(-1).opts.body);
+    es.dispatch({kind:'native-notification',action:'activated',clientId:background.clientId,key:background.key,sessionId:'B',autoFocus:false},'pharos');await m1Wait(15);
+    m1a(r.bag.opened.some(x=>x[0]==='uiWorkspace.openSession'&&x[1]==='B')&&posts.filter(p=>p.url.endsWith('/desktop-focus')).length===beforeFocus,'autoFocus off keeps native navigation in the background');
+    failNative=true;const beforeDom=toastCount(r);es.dispatch(m1Frame('error','B','native failed'),'pharos');await m1Wait(30);
+    m1a(toastCount(r)===beforeDom+1&&r.bag.notifications.length===0,'native failure adds one page fallback without retrying a Web notification');
+    app.teardown();await m1Wait(20);
+    m1a(posts.some(p=>p.opts.method==='DELETE')&&api.debug().nativeNotifications.length===0,'native teardown releases only its client entries');
+  }
+
+  // Different targets remain paired with their own keys during out-of-order clicks.
+  {
+    localStorage.removeItem('dshPharos.config');
+    const posts=[];
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url.endsWith('/config'))return {ok:true,json:async()=>({desktopNativeNotifications:true})};
+      posts.push({url,opts});return {ok:true,json:async()=>({requested:true,id:'mixed-'+posts.length})};
+    }});
+    const app=m1Apply(r,{extraRows:{'mixed-child':{id:'mixed-child'}}});await m1Wait(20);
+    const api=r.context.window.__dshPharos,es=r.ES.instances.at(-1),targets=['A','B','mixed-child'];
+    for(const [i,id] of targets.entries())es.dispatch(m1Frame('remote',id,'mixed-body-'+i),'pharos');
+    await m1Wait(25);
+    const requests=posts.filter(p=>p.url.endsWith('native-notifications')).map(p=>JSON.parse(p.opts.body));
+    m1a(requests.length===3&&new Set(requests.map(p=>p.key)).size===3,'three different notifications retain separate activation keys');
+    for(const i of [2,0,1]) {
+      const p=requests[i],before=r.bag.opened.length;
+      const frame={kind:'native-notification',action:'activated',clientId:p.clientId,key:p.key,sessionId:p.sessionId,autoFocus:true,focusHandled:true};
+      es.dispatch({...frame,sessionId:targets[(i+1)%3]},'pharos');
+      m1a(r.bag.opened.length===before,'mismatched target cannot consume notification '+i);
+      es.dispatch(frame,'pharos');es.dispatch(frame,'pharos');await m1Wait(10);
+      m1a(r.bag.opened.length===before+1&&r.bag.opened.at(-1)?.[1]===targets[i],'out-of-order notification '+i+' navigates once to its own target');
+    }
+    m1a(api.debug().nativeNotifications.length===0,'all mixed notification entries are released after their own clicks');
+    app.teardown();
+  }
+
+  // Saving settings in this window must update the already running notification client.
+  {
+    localStorage.removeItem('dshPharos.config');
+    const posts=[];
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url.endsWith('/config'))return {ok:true,json:async()=>({desktopNativeNotifications:true,autoFocus:false})};
+      posts.push({url,opts});return {ok:true,json:async()=>({requested:true,id:'saved-settings-notice'})};
+    }});
+    const app=m1Apply(r);await m1Wait(20);
+    const api=r.context.window.__dshPharos;
+    const viewSource=fs.readFileSync(new URL('../lib/settings-view.js',import.meta.url),'utf8');
+    // Expose the actual persistence function only in the test VM, without a production test API.
+    vm.runInContext(viewSource.replace('// [settings-view:tail]', 'globalScope.__saveSettingsForTest = writeLocalConfig;\n// [settings-view:tail]'),r.context);
+    m1a(api.config().autoFocus===false,'saved-settings regression starts with runtime autoFocus off');
+    m1a(r.context.window.__saveSettingsForTest({...api.config(),autoFocus:true})===true,'settings persistence succeeds in the same window');
+    m1a(api.config().autoFocus===true,'saved settings immediately update the running client without restart');
+    r.ES.instances.at(-1).dispatch(m1Frame('remote','B','after saving settings'),'pharos');await m1Wait(20);
+    const payload=JSON.parse(posts.find(p=>p.url.endsWith('native-notifications')).opts.body);
+    m1a(payload.autoFocus===true,'next native notification carries the newly enabled autoFocus preference');
+    r.context.window.__saveSettingsForTest({...api.config(),autoFocus:false});
+    m1a(api.config().autoFocus===false,'turning focus off also reaches the running client');
+    app.teardown();
   }
 
   // ---- M2-A: test(kind, stats) 扩展 + stats() 访问器 + localStorage 兜底 ----

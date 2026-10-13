@@ -21,7 +21,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
+import { restoreWindowsDesktop } from '../lib/host/desktop.js';
+import { removeWindowsWorkflowHistory, validWorkflowTags } from '../lib/host/notification-history.js';
 
 let failed = 0;
 let passed = 0;
@@ -32,7 +36,7 @@ const assert = (cond, msg) => {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- host 模块加载（探测形态；契约 §1 以交付为准） ----------
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const importFresh = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
 let hostMod = null;
@@ -606,7 +610,7 @@ if (store) {
   {
     const ctxHome = { get: () => ({ name: 'desktop' }) };
     const p = store.pharosFilePath(ctxHome, { DSH_HOME: '/x/home' });
-    assert(p === path.join('/x/home', 'profiles', 'desktop', 'pharos.json'), 'DSH_HOME+profiles/name 解析');
+    assert(p === path.join(path.resolve('/x/home'), 'profiles', 'desktop', 'pharos.json'), 'DSH_HOME+profiles/name 解析');
   }
   {
     const ctxDir = { get: () => ({ name: 'desktop', dir: '/custom/dir' }) };
@@ -615,7 +619,7 @@ if (store) {
   }
   {
     const p = store.pharosFilePath({ get: () => null }, { DSH_HOME: '/x/home' });
-    assert(p === path.join('/x/home', 'pharos.json'), '无 profileContext 回退 <home>/pharos.json');
+    assert(p === path.join(path.resolve('/x/home'), 'pharos.json'), '无 profileContext 回退 <home>/pharos.json');
   }
   {
     const merged = store.deepMerge(store.DEFAULT_CONFIG, { quietHours: { start: '20:00' } });
@@ -1368,6 +1372,112 @@ if (!stats) {
     'm1Ready 为假且源码已含实现时硬失败（M1 组不再静默 skip）');
   assert(/hasImpl \? '含（→ 是加载失败）'/.test(smokeSrc),
     '门禁区分「加载失败」与「尚未实现」两种豁免，避免误伤早期版本');
+}
+
+// Windows 窗口恢复：固定协议、独立平台分支、失败回传；测试不启动应用。
+{
+  const launches = []; let unrefCalls = 0;
+  const launch = (...args) => {
+    launches.push(args); const child = new EventEmitter(); child.unref = () => { unrefCalls++; };
+    queueMicrotask(() => child.emit('spawn')); return child;
+  };
+  assert(await restoreWindowsDesktop({ platform: 'darwin', launch }) === false && launches.length === 0, 'macOS 不启动 Windows 恢复入口');
+  const restoreRequest = restoreWindowsDesktop({ platform: 'win32', launch, systemRoot: 'C:\\Windows' });
+  assert(unrefCalls === 0, '收到 spawn 之前不提前释放子进程引用');
+  assert(await restoreRequest === true, 'Windows 恢复请求可提交');
+  assert(unrefCalls === 1, '成功 spawn 后释放子进程引用，避免阻止宿主退出');
+  assert(launches[0][0] === 'C:\\Windows\\explorer.exe' && launches[0][1].length === 1 && launches[0][1][0] === 'dsh://open' && launches[0][2].shell === false && launches[0][2].windowsHide === true,
+    '窗口恢复只启动固定 DSH 协议，无 shell 或用户命令');
+  let launchFailed = false;
+  try { await restoreWindowsDesktop({ platform: 'win32', launch: () => {
+    const child = new EventEmitter(); child.unref = () => { unrefCalls++; };
+    queueMicrotask(() => child.emit('error', new Error('launch failed'))); return child;
+  } }); } catch { launchFailed = true; }
+  assert(launchFailed, 'Windows 启动失败不会冒充恢复成功');
+  assert(unrefCalls === 1, '启动失败路径不调用 unref');
+
+  const ctx = makeStubCtx(); let requests = 0; let throwFocus = false;
+  const cfg = { enabled: true, autoFocus: true };
+  const ds = routes.registerRoutes({ webServer: ctx.webServer, store: { getConfig: () => cfg }, bus: { subscribe: () => () => {} },
+    restoreDesktop: async () => { requests++; if (throwFocus) throw Error('launch failed'); return true; } });
+  const focus = async (extra = {}) => {
+    const c = callApi(ctx, '/pharos/api/desktop-focus', { method: 'POST', headers: { 'content-type': 'application/json', 'x-pharos-desktop': '1' }, body: {}, ...extra });
+    await c.done; return c.res;
+  };
+  assert((await focus()).state.status === 200 && requests === 1, '桌面代理无 Origin 时可请求恢复');
+  assert((await focus({ remoteAddress: '10.0.0.1' })).state.status === 403 && requests === 1, '非本机请求不能恢复窗口');
+  assert((await focus({ headers: { 'content-type': 'application/json' } })).state.status === 403, '缺桌面自定义头拒绝');
+  assert((await focus({ headers: { 'content-type': 'application/json', 'x-pharos-desktop': '1', origin: 'https://evil.example' } })).state.status === 403, '跨站 Origin 拒绝');
+  assert((await focus({ method: 'GET' })).state.status === 405, '窗口恢复只接受 POST');
+  assert((await focus({ headers: { 'content-type': 'text/plain', 'x-pharos-desktop': '1' } })).state.status === 400, '窗口恢复不接受简单表单类型');
+  cfg.autoFocus = false;
+  assert(JSON.parse((await focus()).body).requested === false && requests === 1, '关闭自动聚焦后宿主不启动协议');
+  cfg.autoFocus = true; cfg.enabled = false;
+  assert(JSON.parse((await focus()).body).requested === false && requests === 1, '关闭提醒后宿主不启动协议');
+  cfg.enabled = true; throwFocus = true;
+  assert((await focus()).state.status === 500, '协议启动异常回传失败状态');
+  ds();
+}
+
+// Native workflow history cleanup: scoped identifiers, fixed program and bounded child lifetime.
+{
+  const tag = 'pharos-wf-abc-def-0';
+  assert(validWorkflowTags([tag]) && !validWorkflowTags([]) && !validWorkflowTags(Array(129).fill(tag)), '历史清理只接受非空、最多 128 个工作流 ID');
+  assert(['pharos-wf-0', 'session-123', 'x;Start-Process calc', 'pharos-wf-' + 'a'.repeat(50) + '-b-0'].every(x => !validWorkflowTags([x])),
+    '历史清理拒绝旧共享 ID、会话 ID、命令字符和超长标识');
+  const launches = []; let payload, killed = 0;
+  const fakeLaunch = (...args) => {
+    launches.push(args);
+    const child = new EventEmitter(); child.stdin = new EventEmitter();
+    child.stdin.end = data => { payload = data; queueMicrotask(() => child.emit('close', 0)); };
+    child.kill = () => { killed++; }; return child;
+  };
+  assert(await removeWindowsWorkflowHistory([tag], {platform:'darwin',launch:fakeLaunch}) === false && !launches.length,
+    '其他平台不启动原生历史清理');
+  assert(await removeWindowsWorkflowHistory([tag,tag], {platform:'win32',launch:fakeLaunch,systemRoot:'C:\\Windows'}) === true,
+    '原生历史清理等待子进程成功结束');
+  const [program,args,options] = launches[0];
+  const script = Buffer.from(args.at(-1),'base64').toString('utf16le');
+  assert(program === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' && options.shell === false && options.windowsHide === true,
+    '清理使用固定系统程序、无 shell、隐藏窗口');
+  assert(JSON.parse(payload).length===1 && !script.includes(tag) && script.includes("'Notifications', 'electron.app.DeepSeek Harness'") && !script.includes('.Clear('),
+    '清理标识去重后经 stdin 传递，脚本固定应用和分组，不清空其他通知');
+  assert(script.includes('$nativeTags -ccontains $toast.Tag'), '历史清理后读回检查，不把成功退出当成删除成功');
+  if (process.platform === 'win32') {
+    const parser = script.slice(0, script.indexOf('$history =')) + '\nConvertTo-Json -InputObject $nativeTags -Compress';
+    const secondTag='pharos-wf-abc-def-1';
+    const result=spawnSync(program,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(parser,'utf16le').toString('base64')],
+      {input:JSON.stringify([tag,secondTag]),encoding:'utf8',shell:false,windowsHide:true,timeout:8000});
+    assert(result.status===0 && JSON.parse(result.stdout).join(',')===[tag,secondTag].map(x=>'n#dsh-app://app#'+x).join(','),
+      '真实 Windows PowerShell 能逐条解析多 tag，防止 ConvertFrom-Json 嵌套数组导致假成功');
+  }
+  let error;
+  try { await removeWindowsWorkflowHistory([tag], {platform:'win32',launch:() => {
+    const c = new EventEmitter();c.stdin=new EventEmitter();c.stdin.end=()=>queueMicrotask(()=>c.emit('close',1));c.kill=()=>{};return c;
+  }}); } catch(e) {error=e;}
+  assert(error?.message==='workflow history cleanup failed', '原生清理失败不冒充成功');
+  error=null;
+  try { await removeWindowsWorkflowHistory([tag], {platform:'win32',timeoutMs:20,launch:() => {
+    const c = new EventEmitter();c.stdin=new EventEmitter();c.stdin.end=()=>{};c.kill=()=>{killed++;};return c;
+  }}); } catch(e) {error=e;}
+  assert(error?.message==='workflow history cleanup timed out' && killed===1, '超时终止自身清理子进程并回传失败');
+  error=null;
+  try {await removeWindowsWorkflowHistory(['bad'], {platform:'win32',launch:fakeLaunch});}catch(e){error=e;}
+  assert(!!error && launches.length===1, '非法标识不会启动系统程序');
+
+  const ctx=makeStubCtx();const calls=[];let fail=false;
+  const dispose=routes.registerRoutes({webServer:ctx.webServer,store:{getConfig:()=>({enabled:true})},bus:{subscribe:()=>()=>{}},
+    removeWorkflowHistory:async tags=>{calls.push(tags);if(fail)throw Error('cleanup failed');return true;}});
+  const cleanup=async(extra={})=>{const c=callApi(ctx,'/pharos/api/workflow-history',{method:'POST',headers:{'content-type':'application/json','x-pharos-desktop':'1'},body:{tags:[tag]},...extra});await c.done;return c.res;};
+  assert((await cleanup()).state.status===200 && calls[0][0]===tag,'同源桌面请求可清理指定工作流条目');
+  assert((await cleanup({remoteAddress:'10.0.0.1'})).state.status===403,'历史清理拒绝非 loopback');
+  assert((await cleanup({headers:{'content-type':'application/json','x-pharos-desktop':'1',host:'attacker.example'}})).state.status===403,'历史清理拒绝伪造 Host');
+  assert((await cleanup({headers:{'content-type':'application/json','x-pharos-desktop':'1',origin:'https://evil.example'}})).state.status===403,'历史清理拒绝跨站 Origin');
+  assert((await cleanup({headers:{'content-type':'application/json'}})).state.status===403,'历史清理需要自定义头');
+  assert((await cleanup({method:'GET'})).state.status===405,'历史清理只接受 POST');
+  assert((await cleanup({headers:{'content-type':'text/plain','x-pharos-desktop':'1'}})).state.status===400,'历史清理拒绝简单请求内容类型');
+  assert((await cleanup({body:{tags:['dsh-pharos:ordinary']}})).state.status===400 && calls.length===1,'普通通知 ID 不进入清理程序');
+  fail=true;assert((await cleanup()).state.status===500,'历史清理程序异常回传失败');dispose();
 }
 
 console.log(failed === 0
