@@ -2,7 +2,7 @@
 
 > 法罗斯灯塔（Pharos of Alexandria），世界七大奇迹之一，为夜航者引航。它在你离开 DSH 时替你守望：**任务完成、出错需要你知道、或是模型在等你操作**——灯塔亮起，把你唤回。
 
-DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「运行出错 / 被中断 / 达到上限 / 后台任务」多路提醒** — 系统通知 + 分音型提示音 + 标题标记 + 可选的 Webhook 出站推送，专为"问完就切走、后台等结果"设计。能力对标社区四个同类插件（dsh-notify-me / dsh-turn-notify / dsh-my-notify / dsh-session-notify）中**浏览器半可实现**的部分，并为当前运行时（DSH 0.2.0-rc.2）原生实现：**零依赖、零 peer 声明**，无兼容性门槛。
+DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「运行出错 / 被中断 / 达到上限 / 后台任务」多路提醒** — 系统通知 + 分音型提示音 + 标题标记 + 可选的 Webhook 出站推送，专为"问完就切走、后台等结果"设计。**点击通知可直接跳转到对应会话**（同类四个社区插件在当前运行时都做不到，见[复盘](docs/postmortem-0.6.3-nav.md)）；macOS / Windows / 浏览器三条通知通道，Windows 走原生 Toast。浏览器半**零依赖、零 peer 声明**，无兼容性门槛。
 
 ## 提醒时机
 
@@ -23,7 +23,7 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 
 - **事件来源两条链路（v0.4 双半）**：浏览器半 `uiSession.sessionStatus`（需要你 / 回复完成，沿用 v0.3 语义）＋ host 半 **SSE**（`/pharos/api/stream`，`event: pharos` 命名帧：done / error / interrupted / limit / job / remote / **workflow**，内置 25s 心跳维持长连）——SSE 帧同时是 webhook 出站推送的事件源。
 - **输出渠道**：系统通知 + 分音型提示音 + 标题标记/`⏳` 闪烁兜底（通知不可用时，6s）＋ **Webhook 出站推送**（可选：企微/飞书/钉钉加签 + 通用透传；5s 超时、指数退避重试、失败环形缓冲 50 条；受 quiet hours / events / 子代理过滤约束）。
-- 点通知：窗口回前台，并尽力打开对应会话（best-effort）。
+- 点通知：窗口回前台，并**跳转到对应会话**（v0.6.3 起走宿主的 `uiWorkspace.openSession`，真正切换主视图；不再是修复前那种「只拉窗口不换页」的 best-effort）。
 - 去重：SSE 帧级 2s 窗口 + **双源 done 去重**（SSE done 与 uiSession done 同会话只弹一次）+ 同会话节流（`minIntervalMs`，默认 6s）。
 - 页面加载时已存在的待办补提醒一次；历史完成状态不补弹。
 - 主开关关闭后：不弹通知、不响铃、不亮标记、不闪烁、不推 webhook。
@@ -48,7 +48,7 @@ DSH 桌面端守望提醒插件：**「需要你操作」+「回复完成」+「
 
 ![Windows Webhook 消息格式：禁用示例中的简洁、详细、自定义三档](assets/screenshot-9-webhook-formats.png)
 
-> 前两张保留为 macOS 历史真实通知示例；其余截图于 2026-10-11 在 Windows 本机拍摄，界面标注 v0.6.3，尚非新版本发布。基本设置与提醒时机两张已按 `cf214de` 实际安装代码重拍，显示“最近 3 条”工作流进展提示；其余原图入库于 `c334fb4`、裁切于 `2938c5d`。Windows 图片仅裁掉空白和无关背景，保留真实文字与控件。设置页截图展示当轮统计、基本设置、三档提醒时机、免打扰、过滤、Webhook、高级、测试与 Debug。Webhook 格式图使用已禁用的临时示例和 `example.invalid` 地址，拍摄后已恢复空列表，没有配置真实密钥。
+> 前两张保留为 macOS 历史真实通知示例；其余截图于 2026-10-11 在 Windows 本机拍摄（当时界面标注 v0.6.3，现该版本已发布）。基本设置与提醒时机两张已按 `cf214de` 实际安装代码重拍，显示“最近 3 条”工作流进展提示；其余原图入库于 `c334fb4`、裁切于 `2938c5d`。Windows 图片仅裁掉空白和无关背景，保留真实文字与控件。设置页截图展示当轮统计、基本设置、三档提醒时机、免打扰、过滤、Webhook、高级、测试与 Debug。Webhook 格式图使用已禁用的临时示例和 `example.invalid` 地址，拍摄后已恢复空列表，没有配置真实密钥。
 
 工作流图来自 macOS 的真实多 agent 工作流（3 个并发 agent）通知栈，正文带工作流名 `multi-agent-audit`；最上方「任务已完成」是主会话整体完成。它不代表 Windows 工作流实机验收。Windows 的通知显示和点击结果见 [验收记录](docs/issue-1-windows-notifications.md)；这里尚未附 Windows 系统通知横幅截图。截图维护清单见 [截图指南](docs/screenshot-guide.md)。
 
@@ -76,7 +76,7 @@ Windows「只有声音」（真实事件无系统通知）的定位、修复与�
 
 Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。每次 COM 点击先核验存活票据和当前自动聚焦开关，再向通过名称、会话与启动时间校验的宿主父进程（DSH 主进程）移交前台权限，随后消费票据并通过固定 `dsh://open` 请求恢复窗口。权限按次交接，不向所有进程授权，不改系统前台锁策略。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时不授权、只在后台切换会话。v0.6.4 已通过第十九轮 C→A→B 连续点击：每次从 Sourcetree 自动恢复 DSH，并导航到正确主/子会话；此前仅闪烁任务栏的问题已在本机复验通过。
 
-首次发送会在当前用户注册 Pharos 自有的 AUMID 和 COM CLSID，生成的激活程序缓存于 `%LOCALAPPDATA%\dsh-pharos\notifications`。写入仅限两个带所有者标记的私有注册表键，发现其他所有者时停止原生发送；不重建共享注册表键、不修改默认协议关联。另在当前用户开始菜单创建独立的 `DSH Pharos Notifications.lnk`，设置应用 ID 与激活 CLSID 并读回核验，保留 DSH 原快捷方式；同名快捷方式属于其他应用时拒绝覆盖。注册、快捷方式和缓存会留在本机，退出时释放 COM 监听并清理本轮通知入口；卸载插件不会自动删除这些私有注册及缓存。此通道要求 DSH host 正在运行，不支持退出后冷启动恢复旧会话。曾测试的 `dsh-pharos://` 协议候选因 Windows 报“没有可打开此链接的应用”已撤回。当前 COM 候选已验证关闭自动聚焦时后台跨会话导航，以及三条通知同时保留、乱序点击分别进入对应主/子会话；此结果不代表所有 Windows 版本或免打扰模式下横幅都可见。
+首次发送会在当前用户注册 Pharos 自有的 AUMID 和 COM CLSID，生成的激活程序缓存于 `%LOCALAPPDATA%\dsh-pharos\notifications`。写入仅限两个带所有者标记的私有注册表键，发现其他所有者时停止原生发送；不重建共享注册表键、不修改默认协议关联。另在当前用户开始菜单创建独立的 `DSH Pharos Notifications.lnk`，设置应用 ID 与激活 CLSID 并读回核验，保留 DSH 原快捷方式；同名快捷方式属于其他应用时拒绝覆盖。注册、快捷方式和缓存会留在本机，退出时释放 COM 监听并清理本轮通知入口；卸载插件不会自动删除这些私有注册及缓存。此通道要求 DSH host 正在运行，不支持退出后冷启动恢复旧会话。曾测试的 `dsh-pharos://` 协议候选因 Windows 报“没有可打开此链接的应用”已撤回。v0.6.4 已验证关闭自动聚焦时后台跨会话导航，以及三条通知同时保留、乱序点击分别进入对应主/子会话；此结果不代表所有 Windows 版本或免打扰模式下横幅都可见。
 
 工作流只保留当前客户端最近 3 条入口；淘汰时删除本应用 Pharos 组的指定历史并读回核实，删除失败时停止本次发送并显示页内反馈。SSE/Webhook 的原始工作流事件仍完整投递，普通通知不受这项三条规则影响。Debug 的 `desktopNativeNotifications`、`nativeNotifications` 和 `recentNotifications[].nativeId` 可确认通道与目标；nativeId 表示系统 API 已接收，不单独证明横幅可见。`GET /pharos/api/native-notifications`（请求头 x-pharos-desktop:1）提供助手状态和最近 20 条原生事件；`desktop-identity` 记录绑定的主进程，`com-activated.foregroundGranted` 记录本次授权 API 结果，均不能单独代替前台实机验收。助手故障不会重复发送 Web 系统通知，而是补一次页内反馈；助手最多保留 512 个未释放条目，用户关闭或点击后释放。macOS 与普通浏览器仍用原来的通知通道。没有新 host 时保留旧 Web 路径及 `workflowHistoryCleanup` 诊断，其历史点击仍可能受宿主关闭事件影响。退出或重启后无法延续旧点击监听，旧版本历史不会自动接管。
 
@@ -125,6 +125,7 @@ window.__dshPharos.debug()
 - **桌面端（推荐）**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
 - **CLI（GitHub 源）**：`dsh plugin add github:Leo-Cjw/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
 - **npm（推荐）**：`dsh plugin add dsh-pharos` —— 已发布至 npm（[dsh-pharos](https://www.npmjs.com/package/dsh-pharos)），一条命令装好。npm 包为预构建产物，免 `allowBuilds` 授权，体积约 130 KB（README 截图不随包分发，仅在 GitHub 显示）。
+- **插件市场搜索**：收录 PR 已提交至 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)（`data/plugins/Leo-Cjw__dsh-pharos.yml`），合并后即可在市场内直接搜到；在此之前请用上面三种方式安装。
 
 **本机开发安装**（改本地代码直接生效，无需发布）：
 
@@ -193,12 +194,13 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 | 未处理二次提醒 | dsh-turn-notify（10 分钟）| ✅ |
 | 通知不可用时标题闪烁兜底 | dsh-turn-notify | ✅（⏳，6s）|
 | 耗时小结 | dsh-turn-notify / dsh-session-notify | ✅（客户端计时；token/TPS 需 host 侧数据，未做）|
-| 点击通知直达会话 | dsh-notify-me / dsh-my-notify | ✅（best-effort）|
+| 点击通知直达会话 | dsh-notify-me / dsh-my-notify | ✅ **v0.6.3 真正可用**（同类四个插件在当前运行时都无法跳转，详见[复盘](docs/postmortem-0.6.3-nav.md)）|
 | 设置页（设置→消息通知）| dsh-turn-notify / dsh-my-notify | ✅ v0.4（`settings.section` 槽位——与两个对标插件同款；React 经模块表 `require('react')`）|
 | 多事件分类（出错/被中断/达到上限）+ 独立音效 | dsh-turn-notify | ✅ v0.4（host 半 `session/event` reason.kind 归一定类 → SSE 帧；error 重低音、interrupted/limit 中音警示）|
 | 出站 webhook（企微/飞书/钉钉/通用 + 加签/重试/失败缓冲）| dsh-my-notify | ✅ v0.4（host 半 `/pharos/api/stream` 双通道之一）|
 | 远程触发接口（本机 POST 通知）| dsh-my-notify | ✅ v0.4（`POST /pharos/api/trigger`，loopback 围栏 + 可选 `x-pharos-token`）|
-| Windows 原生推送 + 自定义图片 | dsh-session-notify | N/A（macOS 平台）|
+| Windows 原生推送 | dsh-session-notify | ✅ **v0.6.4**（隐藏原生 Toast 助手 + 独立 AUMID + COM 激活监听；修 issue #1）|
+| 自定义通知图片/图标 | dsh-session-notify | ❌ 未做 |
 
 ## 已知限制
 
@@ -208,7 +210,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 - 出错/被中断/达到上限依赖 reason.kind 在 `turn/end` 上的出现（0.2.0-rc.2 已见 interrupted/forked；更全的 kind 集合随运行时演进，未知 kind 静默降级由 `agent/error` 等兜底）。
 - 当轮统计（缓存命中率/TPS）依赖 host 半的官方投影 `ctx.sessionProjections`（`tokenUsage`/`sessionStats`）；投影不可用或插件中途启用（无 turn/start 基线）时静默降级为「仅耗时+tokens」，不报错。
 - 点击通知通过 `uiWorkspace.openSession` 切换已有会话；归档、已删除或尚未就绪的会话不保证跳转。Windows 窗口恢复依赖 DSH 注册的 `dsh://open` 协议及同机 host；关闭自动聚焦后只切后台会话，不恢复窗口。
-- 宿主原生 osascript 通知（`hostNotify`）未实现，该配置项仅保留兼容。Windows 窗口恢复新增 `node:child_process`，只启动系统 `explorer.exe` 打开固定 `dsh://open`，不执行 shell、不接受请求提供的命令或 URL。历史投稿清单的「无 child_process」描述不再适用于此候选，重新投稿前需按实际代码复核。跨设备通知仍请用 Webhook。
+- 宿主原生 osascript 通知（`hostNotify`）未实现，该配置项仅保留兼容。Windows 窗口恢复新增 `node:child_process`，只启动系统 `explorer.exe` 打开固定 `dsh://open`，不执行 shell、不接受请求提供的命令或 URL。历史投稿清单的「无 child_process」描述已不适用于 v0.6.4（Windows 窗口恢复引入），插件市场收录条目已按实际代码复核。跨设备通知仍请用 Webhook。
 - **工作流提醒（v0.6）默认关闭**，需在设置页开启 `workflowEvents`；开启需**重启 DSH** 生效（订阅在启动时建立），关闭则即时生效。`workflowLog`（高频旁白）可**独立**开启，只进调试队列不弹通知。
   → 完整效果、触发条件与排查步骤见 **[docs/sop-workflow-events.md](docs/sop-workflow-events.md)**（SOP）。 要实机验证？现成的工作流 prompt 见 **[docs/sop-verify-workflow-prompt.md](docs/sop-verify-workflow-prompt.md)**。
   ⚠️ **普通对话不会产生工作流事件** —— 仅当模型执行多 agent 工作流任务、脚本调用 `phase()`/`agent()` 时才有提醒。

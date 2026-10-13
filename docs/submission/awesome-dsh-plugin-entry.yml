@@ -1,5 +1,12 @@
-# awesome-dsh-plugin 收录条目（投稿文件）
-# 提交方式：fork awesome-dsh-plugin → 新增 data/plugins/Leo-Cjw__dsh-pharos.yml → 重新生成 README → PR
+# awesome-dsh-plugin 收录条目（已提交）
+#
+# 官方投稿方式（contributing.md）：一个 PR、一个文件，路径必须是
+#   data/plugins/<owner>__<repo>.yml  →  data/plugins/Leo-Cjw__dsh-pharos.yml
+# 两个 README 由脚本从 data/plugins/*.yml 生成，合并后自动重跑，勿手工编辑。
+# 只有 description.en 必填；含 ": "（冒号加空格）时必须加引号，否则 YAML 解析失败。
+#
+# 状态：PR 已提交（2026-10-13），等待合并。合并后可在插件市场内直接搜到。
+# 本文件是**仓库内的留档副本**，实际投稿文件名为 Leo-Cjw__dsh-pharos.yml。
 
 url: https://github.com/Leo-Cjw/dsh-pharos
 name: Leo-Cjw/dsh-pharos
