@@ -124,7 +124,7 @@ window.__dshPharos.debug()
 
 - **桌面端（推荐）**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
 - **CLI（GitHub 源）**：`dsh plugin add github:Leo-Cjw/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
-- **npm**：`dsh plugin add dsh-pharos` —— ⚠️ **该包尚未发布到 npm**，此命令目前会失败。npm 上架后可用；npm 包为预构建产物，免 `allowBuilds` 授权，一条命令装好。发布状态见 [npm 上的 dsh-pharos](https://www.npmjs.com/package/dsh-pharos)。
+- **npm（推荐）**：`dsh plugin add dsh-pharos` —— 已发布至 npm（[dsh-pharos](https://www.npmjs.com/package/dsh-pharos)），一条命令装好。npm 包为预构建产物，免 `allowBuilds` 授权，体积约 130 KB（README 截图不随包分发，仅在 GitHub 显示）。
 
 **本机开发安装**（改本地代码直接生效，无需发布）：
 
