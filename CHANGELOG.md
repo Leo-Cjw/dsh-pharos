@@ -2,23 +2,48 @@
 
 本文件记录 dsh-pharos 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.6.4] — 2026-10-13
+
+minor 版：修 [issue #1](https://github.com/Leo-Cjw/dsh-pharos/issues/1) —— Windows 上真实事件只有提示音、没有系统通知（而 `POST /trigger` 测试却能弹）。含 Windows 原生通知通道与点击跳转的落地。
 
 ### 修复
 
-- Windows 系统通知不再传入包含会话 ID 的 `tag`。Electron 把 Chromium 的 `n#origin#tag` 作为 Windows 原生 tag；真实会话 ID 会令它超过 64 字符上限，出现只有插件声音、没有系统通知的情况（[issue #1](https://github.com/Leo-Cjw/dsh-pharos/issues/1)）。去重保留在事件策略层。
-- `completionUnread` 完成信号与 running/SSE 共用完成时机、子代理过滤和节流，防止绕过 off/hidden 策略或重复提醒。隐藏页面同时检查 visibilityState。
-- 接住 Web Notification 的异步 `error`，只补一次页内提示，不重复响铃；通知诊断区分请求、显示回调、失败和静默。设置页明确测试按钮只验证页内提示。
-- 修正 host 测试的 Windows file URL 转换和根路径预期，使完整测试可以在 Windows 运行。
-- Windows Electron 在新 host 支持时使用隐藏的原生 Toast 助手，以独立 AUMID 显示并保持 COM 激活监听，超时后保留一次性随机票据入口。host 按当前自动聚焦开关通过固定 `dsh://open` 恢复窗口，再经 SSE 让原客户端导航；断线重连补交、重复消费拒绝。当前用户仅注册 Pharos 自有 AUMID/CLSID、独立开始菜单快捷方式并缓存激活程序，不修改共享注册表键、DSH 原快捷方式或注册新 URI 协议；不支持退出后冷启动恢复旧会话。macOS 与普通浏览器继续使用原通道；没有新 host 时保留 Web `requireInteraction` 兼容路径。
-- Windows 工作流保留当前客户端最近 3 条入口。每条使用随机短 tag，原始会话 ID 留在 host 映射；淘汰时删除本应用 Pharos 组指定历史并读回，删除失败停止新发送。助手失败只补一次页内提示，不重复发送 Web 通知。SSE/Webhook 原始事件仍完整投递；旧 Web 路径保留独立历史清理及诊断。
-- 控制台 API 版本复用设置页的版本来源，与包版本一致；补齐完成节流抑制不延长窗口、诊断记录及窗口恢复子进程 `unref()` 的回归测试。
-- 设置保存后同步当前窗口运行中的通知配置，修复自动聚焦开关已落盘但通知仍使用旧值的问题，无需重启才能应用。
-- 补齐三条不同目标通知的并发发送、乱序激活、错误目标拒绝及重复消费回归；本机三条通知 C→A→B 点击均对应原始主/子会话，没有错配。
+- **Windows 真实事件无系统通知（issue #1 根因）**：旧实现把完整会话 ID 写进 Web Notification 的 `tag`：
 
-- 修复连续点击通知只闪烁任务栏：每次 COM 回调先核验存活票据和自动聚焦开关，向已验证身份/启动时间的 DSH 主进程授予前台权限，再消费票据、恢复窗口及导航。关闭自动聚焦或过期票据不授权，授权失败仍保留导航路径；不修改系统前台锁或向所有进程授权。第十九轮 C→A→B 三次均从 Sourcetree 自动恢复并进入对应主/子会话，用户验收通过。
+  ```js
+  new Notification(title, { body, tag: `dsh-pharos:${sessionId}:${kind}`, silent: true })
+  ```
 
-验证范围与剩余限制见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。本机连续前台恢复与多通知映射均通过，不推广为所有 Windows 版本或系统模式通过。
+  Electron 在 Windows 会把 Chromium 生成的 `n#<origin>#<token>` 整串传给 WinRT `ToastNotification.Tag`，而该字段在 Creators Update 后有 **64 字符上限**。本机来源前缀 `n#dsh-app://app#` 占 16 字符，典型会话 ID 占 44 字符 → done 的 tag 长 **76**、error 77、attention 81、remote 78，**全部超限**，通知被系统静默丢弃。这解释了「手动触发（短 ID）能弹、真实事件（长 ID）不能弹」的表面矛盾。现改为不传 `tag`，由 Chromium 生成独立随机 token；去重仍在事件策略层生效。
+  - 长度由本地 Node 计算，上限来自 Microsoft 文档；未读取到原生 HRESULT，判断依据是「实现链 + 长度计算 + 去 tag 前后实机对照」。
+  - 另注：Electron 的 Web 通知委托**不实现**原生失败到 Web Notification `error` 的回传，故旧代码「没抛异常」不能作为显示成功的依据。
+
+- `completionUnread` 完成信号不再绕过 `notifyDone`，与 running/SSE 共用完成时机、子代理过滤与节流 —— 防止绕过 off/hidden 策略或重复提醒。隐藏判断同时考虑 `document.visibilityState` 与 `hasFocus`。
+- 接住 Web Notification 的异步 `error`：只补一次页内提示，不重复响铃；诊断区分「请求 / 显示回调 / 失败 / 静默」。设置页明确测试按钮**只验证页内提示与声音**，不能作为 Windows 通知验收依据。
+- 设置保存后同步**当前窗口运行中**的通知配置 —— 修复自动聚焦开关已落盘、通知却仍用旧值的问题（原先需重启才生效）。
+- 修正 host 测试的 Windows file URL 转换与根路径预期，使完整测试可在 Windows 运行。
+
+### 新增：Windows 原生通知与点击跳转
+
+- Windows Electron 在 host 支持时使用**隐藏的原生 Toast 助手**，以独立 AUMID `LeoCjw.DshPharos` 显示，并保持 COM 激活监听。当前用户仅注册 Pharos 自有 AUMID/CLSID、独立开始菜单快捷方式并缓存激活程序 —— **不修改共享注册表键、DSH 原快捷方式，也不注册新 URI 协议**。
+- **点击跳转链路**：通知携带一次性随机票据 → 点击经本机 host/SSE 返回原始会话 ID → 调用 `uiWorkspace.openSession` 导航。COM 回调先核验存活票据与当前自动聚焦开关，再向经**名称/会话/启动时间**校验的宿主父进程按次移交前台权限，随后经固定 `dsh://open` 恢复窗口。关闭自动聚焦或票据过期则**不授权**，仅在后台切换会话；不修改系统前台锁、不向所有进程授权。断线重连补交，重复消费拒绝。
+- **工作流容量**：Windows 保留当前客户端最近 **3 条**入口，每条随机短 tag，原始会话 ID 留在 host 映射；淘汰时删除本应用 Pharos 组指定历史并读回，删除失败则停止新发送。
+- macOS 与普通浏览器继续使用原通道；无新 host 时保留 Web `requireInteraction` 兼容路径。
+- 不支持「退出后冷启动恢复旧会话」。
+
+### 验证
+
+- `npm test` 现含三个套件：smoke **349 项** + host **352 项** + Windows 原生助手/安装/前台交接 **193 项**，全部通过。
+- 新增 Windows 模型按上述 ID 规则与 64 字符上限，模拟「构造成功但原生不显示」，校准短 ID 成功、旧长 tag 失败；覆盖 done/error/interrupted/limit/job/remote/workflow 与「需要你」都能收到 show。**该模型是源码契约回归，不替代 Windows 实机。**
+- 反向检查：只把生产通知构造行改回旧 tag → smoke 出现 17 项失败；恢复后全套通过。
+- 实机（Windows 本机，2026-10-10 ~ 10-13）：真实完成与 remote 均已验证；第 19 轮 C→A→B 三条通知连续点击，每次从 Sourcetree 自动恢复 DSH 并进入正确主/子会话，用户验收通过。
+
+### 已知限制（不推广为通用结论）
+
+- 未验证其他 Windows / Electron 版本或系统通知模式；本机注册表实验的完整恢复仍无法确认。
+- `shown` 表示宿主显示回调、通知历史表示原生条目存在；**未保存系统横幅截图**，故不据此声称「用户实际看到横幅」或覆盖所有免打扰场景。
+- 未逐类制造真实错误、审批、中断与工作流任务；它们走同一 deliver 通道且有自动化覆盖。
+- 完整证据链与逐轮记录见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。
 
 ## [0.6.3] — 2026-10-09
 

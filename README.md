@@ -72,9 +72,9 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 
   排查「点了没跳」时先看这四个字段，不要凭现象猜。
 
-Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
+Windows「只有声音」（真实事件无系统通知）的定位、修复与实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)；根因是原生 tag 超过 WinRT 的 64 字符上限，**v0.6.4 修复**。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
-Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。每次 COM 点击先核验存活票据和当前自动聚焦开关，再向通过名称、会话与启动时间校验的宿主父进程（DSH 主进程）移交前台权限，随后消费票据并通过固定 `dsh://open` 请求恢复窗口。权限按次交接，不向所有进程授权，不改系统前台锁策略。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时不授权、只在后台切换会话。当前 Unreleased 候选已通过第十九轮 C→A→B 连续点击：每次从 Sourcetree 自动恢复 DSH，并导航到正确主/子会话；此前仅闪烁任务栏的问题已在本机复验通过。
+Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。每次 COM 点击先核验存活票据和当前自动聚焦开关，再向通过名称、会话与启动时间校验的宿主父进程（DSH 主进程）移交前台权限，随后消费票据并通过固定 `dsh://open` 请求恢复窗口。权限按次交接，不向所有进程授权，不改系统前台锁策略。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时不授权、只在后台切换会话。v0.6.4 已通过第十九轮 C→A→B 连续点击：每次从 Sourcetree 自动恢复 DSH，并导航到正确主/子会话；此前仅闪烁任务栏的问题已在本机复验通过。
 
 首次发送会在当前用户注册 Pharos 自有的 AUMID 和 COM CLSID，生成的激活程序缓存于 `%LOCALAPPDATA%\dsh-pharos\notifications`。写入仅限两个带所有者标记的私有注册表键，发现其他所有者时停止原生发送；不重建共享注册表键、不修改默认协议关联。另在当前用户开始菜单创建独立的 `DSH Pharos Notifications.lnk`，设置应用 ID 与激活 CLSID 并读回核验，保留 DSH 原快捷方式；同名快捷方式属于其他应用时拒绝覆盖。注册、快捷方式和缓存会留在本机，退出时释放 COM 监听并清理本轮通知入口；卸载插件不会自动删除这些私有注册及缓存。此通道要求 DSH host 正在运行，不支持退出后冷启动恢复旧会话。曾测试的 `dsh-pharos://` 协议候选因 Windows 报“没有可打开此链接的应用”已撤回。当前 COM 候选已验证关闭自动聚焦时后台跨会话导航，以及三条通知同时保留、乱序点击分别进入对应主/子会话；此结果不代表所有 Windows 版本或免打扰模式下横幅都可见。
 
@@ -162,7 +162,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 
 从 GitHub 克隆本仓库开发（`git clone git@github.com:Leo-Cjw/dsh-pharos.git && cd dsh-pharos`，零依赖、无需安装）。
 
-- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 **320 项**：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致 / **v0.6.3 跳转会话组**——真导航路径、老宿主兜底正反两面、归档/phase/state 闸门、`ids` vs `byId`、半初始化服务实例不被永久缓存、双形态 Notification（`on('click')` 与 `onclick` 各一条）、同一次完成双源去重、`navLog`/`deliverLog` 轨迹）；host 半：`node test/host.test.mjs`（333 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）
+- 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 **349 项**：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致 / **v0.6.3 跳转会话组**——真导航路径、老宿主兜底正反两面、归档/phase/state 闸门、`ids` vs `byId`、半初始化服务实例不被永久缓存、双形态 Notification（`on('click')` 与 `onclick` 各一条）、同一次完成双源去重、`navLog`/`deliverLog` 轨迹）；host 半：`node test/host.test.mjs`（352 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）；**Windows 原生通道**：`node test/windows-notifications.test.mjs`（原生助手 / 安装器 / 前台交接 / 路由 / 生命周期 —— 含按 64 字符上限模拟「构造成功但原生不显示」的契约回归）。三者由 `npm test` 一并执行
 - 发布流程：改 `lib/` 与 `package.json` → `node tools/sync-settings-view.mjs`（设置页视图内联进 client.js，`npm test` 前会自动执行）→ 跑测试 → 升版本 → `git push` + 打 tag → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention"|"done"|"error")` 验证
 - **复盘文档**：[postmortem-0.6.3-nav.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/postmortem-0.6.3-nav.md)（「点击通知不跳转会话」六轮排查的方法论：静默失败必须自带可观测性、观测代码要与被测代码同源、mock 保真度决定测试有效性）
 - 架构文档：[functional-architecture.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
