@@ -37,7 +37,7 @@
     "build": "node tools/sync-settings-view.mjs",
     "pretest": "node tools/sync-settings-view.mjs",
     "test": "node test/smoke.mjs && node test/host.test.mjs && node test/windows-notifications.test.mjs",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "node tools/sync-settings-view.mjs && node test/smoke.mjs && node test/host.test.mjs && node test/windows-notifications.test.mjs"
   },
   "keywords": [
     "deepseek-harness",

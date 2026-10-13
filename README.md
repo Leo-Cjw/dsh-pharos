@@ -122,9 +122,9 @@ window.__dshPharos.debug()
 
 通过公开 GitHub 仓库一键安装（零构建、零依赖，**仓库根即插件包**）：
 
-- **npm（发布后可用，推荐）**：`dsh plugin add dsh-pharos` —— npm 包为预构建产物，免 `allowBuilds` 授权，一条命令装好
-- **桌面端**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
+- **桌面端（推荐）**：打开 DSH → 插件市场（dshmarket）→ 安装/添加 → 粘贴 GitHub 仓库地址（`github:Leo-Cjw/dsh-pharos` 或完整 URL）→ 安装 → **重启 DeepSeek Harness**
 - **CLI（GitHub 源）**：`dsh plugin add github:Leo-Cjw/dsh-pharos`（具体语法以 `dsh plugin --help` 为准）
+- **npm**：`dsh plugin add dsh-pharos` —— ⚠️ **该包尚未发布到 npm**，此命令目前会失败。npm 上架后可用；npm 包为预构建产物，免 `allowBuilds` 授权，一条命令装好。发布状态见 [npm 上的 dsh-pharos](https://www.npmjs.com/package/dsh-pharos)。
 
 **本机开发安装**（改本地代码直接生效，无需发布）：
 
@@ -164,6 +164,7 @@ lib/settings-view.js# 设置页规范源（内联进 client.js，改后运行 to
 
 - 冒烟测试：`node test/smoke.mjs`（Node ≥ 18；驱动真实 `lib/client.js`；v0.3 全量断言 + M1 组共 **349 项**：SSE 帧消费 / 双源 done 去重 / quiet hours / 子代理过滤 / toast 兜底 / 服务端配置优先 / test() 扩展 / 当轮统计 / **SSE 命名事件契约锁**/**跨文件静态契约锁**（HOST_KINDS ⊆ SSE_KINDS、TEXT.zh/en key 一致、TEST_KINDS ⊆ ALL_TEST_KINDS）/ **M1-L 测试按钮覆盖 workflow** / **M1-M 子代理 done 过滤**——client 注册的事件名须与 host 写出的一致，防两侧漂移回归 / **图标防漂移锁**——`icon.svg` 与内联导航标记的形状、网格、描边权重须一致 / **v0.6.3 跳转会话组**——真导航路径、老宿主兜底正反两面、归档/phase/state 闸门、`ids` vs `byId`、半初始化服务实例不被永久缓存、双形态 Notification（`on('click')` 与 `onclick` 各一条）、同一次完成双源去重、`navLog`/`deliverLog` 轨迹）；host 半：`node test/host.test.mjs`（352 项：事件映射 / SSH・webhook / 鉴权 / 配置打码合并 / quiet hours / 帧去重）；**Windows 原生通道**：`node test/windows-notifications.test.mjs`（原生助手 / 安装器 / 前台交接 / 路由 / 生命周期 —— 含按 64 字符上限模拟「构造成功但原生不显示」的契约回归）。三者由 `npm test` 一并执行
 - 发布流程：改 `lib/` 与 `package.json` → `node tools/sync-settings-view.mjs`（设置页视图内联进 client.js，`npm test` 前会自动执行）→ 跑测试 → 升版本 → `git push` + 打 tag → 在 DSH 插件市场 / CLI 更新安装 → 重启后控制台 `window.__dshPharos.test("attention"|"done"|"error")` 验证
+- **npm 发布流程**：[publish-npm.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/publish-npm.md)（注册绕开网页拦截 / 2FA / Access Token / 已知坑）
 - **复盘文档**：[postmortem-0.6.3-nav.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/postmortem-0.6.3-nav.md)（「点击通知不跳转会话」六轮排查的方法论：静默失败必须自带可观测性、观测代码要与被测代码同源、mock 保真度决定测试有效性）
 - 架构文档：[functional-architecture.md](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/functional-architecture.md)（功能架构雏形：运行时能力核查 + 四仓库对标 + M0/M1/M2 里程碑）
 - 架构图：[pharos-architecture.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-architecture.html)（浏览器半 × Host 半双层结构）· [pharos-sequence.html](https://github.com/Leo-Cjw/dsh-pharos/blob/main/docs/diagrams/pharos-sequence.html)（通知事件流）——浏览器打开即交互（主题切换/聚焦/导出）
