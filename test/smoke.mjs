@@ -2143,6 +2143,56 @@ if (!m1Ready) {
     m1a(posts.some(p=>p.opts.method==='DELETE')&&api.debug().nativeNotifications.length===0,'native teardown releases only its client entries');
   }
 
+  // Different targets remain paired with their own keys during out-of-order clicks.
+  {
+    localStorage.removeItem('dshPharos.config');
+    const posts=[];
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url.endsWith('/config'))return {ok:true,json:async()=>({desktopNativeNotifications:true})};
+      posts.push({url,opts});return {ok:true,json:async()=>({requested:true,id:'mixed-'+posts.length})};
+    }});
+    const app=m1Apply(r,{extraRows:{'mixed-child':{id:'mixed-child'}}});await m1Wait(20);
+    const api=r.context.window.__dshPharos,es=r.ES.instances.at(-1),targets=['A','B','mixed-child'];
+    for(const [i,id] of targets.entries())es.dispatch(m1Frame('remote',id,'mixed-body-'+i),'pharos');
+    await m1Wait(25);
+    const requests=posts.filter(p=>p.url.endsWith('native-notifications')).map(p=>JSON.parse(p.opts.body));
+    m1a(requests.length===3&&new Set(requests.map(p=>p.key)).size===3,'three different notifications retain separate activation keys');
+    for(const i of [2,0,1]) {
+      const p=requests[i],before=r.bag.opened.length;
+      const frame={kind:'native-notification',action:'activated',clientId:p.clientId,key:p.key,sessionId:p.sessionId,autoFocus:true,focusHandled:true};
+      es.dispatch({...frame,sessionId:targets[(i+1)%3]},'pharos');
+      m1a(r.bag.opened.length===before,'mismatched target cannot consume notification '+i);
+      es.dispatch(frame,'pharos');es.dispatch(frame,'pharos');await m1Wait(10);
+      m1a(r.bag.opened.length===before+1&&r.bag.opened.at(-1)?.[1]===targets[i],'out-of-order notification '+i+' navigates once to its own target');
+    }
+    m1a(api.debug().nativeNotifications.length===0,'all mixed notification entries are released after their own clicks');
+    app.teardown();
+  }
+
+  // Saving settings in this window must update the already running notification client.
+  {
+    localStorage.removeItem('dshPharos.config');
+    const posts=[];
+    const r=m1Reload({notificationStyle:'web',bag:{pageFocus:false},userAgent:'Windows NT Electron/44.0.0',fetch:async(url,opts)=>{
+      if(url.endsWith('/config'))return {ok:true,json:async()=>({desktopNativeNotifications:true,autoFocus:false})};
+      posts.push({url,opts});return {ok:true,json:async()=>({requested:true,id:'saved-settings-notice'})};
+    }});
+    const app=m1Apply(r);await m1Wait(20);
+    const api=r.context.window.__dshPharos;
+    const viewSource=fs.readFileSync(new URL('../lib/settings-view.js',import.meta.url),'utf8');
+    // Expose the actual persistence function only in the test VM, without a production test API.
+    vm.runInContext(viewSource.replace('// [settings-view:tail]', 'globalScope.__saveSettingsForTest = writeLocalConfig;\n// [settings-view:tail]'),r.context);
+    m1a(api.config().autoFocus===false,'saved-settings regression starts with runtime autoFocus off');
+    m1a(r.context.window.__saveSettingsForTest({...api.config(),autoFocus:true})===true,'settings persistence succeeds in the same window');
+    m1a(api.config().autoFocus===true,'saved settings immediately update the running client without restart');
+    r.ES.instances.at(-1).dispatch(m1Frame('remote','B','after saving settings'),'pharos');await m1Wait(20);
+    const payload=JSON.parse(posts.find(p=>p.url.endsWith('native-notifications')).opts.body);
+    m1a(payload.autoFocus===true,'next native notification carries the newly enabled autoFocus preference');
+    r.context.window.__saveSettingsForTest({...api.config(),autoFocus:false});
+    m1a(api.config().autoFocus===false,'turning focus off also reaches the running client');
+    app.teardown();
+  }
+
   // ---- M2-A: test(kind, stats) 扩展 + stats() 访问器 + localStorage 兜底 ----
   {
     localStorage.removeItem('dshPharos.config');

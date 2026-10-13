@@ -2,6 +2,8 @@
 
 本记录对应 [issue #1](https://github.com/Leo-Cjw/dsh-pharos/issues/1)。2026-10-10 在用户的 Windows DSH 桌面环境定位并验证；源码基线为插件 0.6.2。以下将实机证据和模拟测试分开。
 
+当前候选（2026-10-13）使用独立 AUMID `LeoCjw.DshPharos`、专用开始菜单快捷方式和运行中 COM 激活监听，并保留 host 窗口恢复与 SSE 重连补交。第十八轮三条通知同时保留，C→A→B 乱序点击均对应指定主/子会话，用户反馈与原生 ID、SSE 目标一致；最终配置已核对，完整测试通过 M1 349 项、host 353 项及 Windows 原生助手/安装测试。历史协议方案已撤回，其通过结果不沿用为当前方案通过。横幅可见性、窗口恢复请求和目标会话跳转分别记录，不用 API 请求成功冒充瞬时前台观测；本机注册表实验的完整恢复仍无法确认。
+
 ## 结论与依据
 
 旧实现把完整会话 ID 写入 Web Notification `tag`：
@@ -231,6 +233,76 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 后续诊断候选为每条通知显式持有独立 sink 和委托，回调使用绑定的原始 native ID；这属于生命周期加强，未证明此前是 GC 导致丢失。新增受同一来源围栏保护的 `GET /pharos/api/native-notifications`（需要 x-pharos-desktop:1），只提供助手 PID、pending/entries 数量和最近 20 条原生 ack/dismissed/activated 事件及关闭原因，不返回正文、密钥或完整会话 ID。接口请求的多余字段不会覆盖内部 event/id/retired 状态。
 
 正常启动该候选后，用普通 remote 通知“原生链路定位10”验证已知主会话目标 `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc`；发出前工具确认 strat、最小化、Sourcetree 前台。原生助手明确记录 show ack，62 毫秒后收到同 ID 的 dismissed/TimedOut，证明关闭回调到 host 的传输可用；窗口系统模式此时为 AlarmsOnly，保留一个入口。已请求用户点击新通知，独立 SSE 观察连接同时保留；Activated 与主会话跳转尚待结果。关闭/激活链路不可用的确切原因仍未确认。该候选完整测试仍为 M1 336 项、host 353 项及原生助手测试通过；新增内部字段边界的测试也通过。
+
+### 协议激活适配（2026-10-12，第十一轮主会话通过）
+
+第十轮用户反馈 DSH 弹出但停留 strat。点击后只读 host 记录仍只有 show ack 和 dismissed/TimedOut，没有 Activated；独立 SSE 未收到激活帧，通知仍在原生历史、助手仍运行。此结果不能归因于 childId 导航闸门，因为已知主会话目标也没有进入导航链路；原生前台回调候选未通过。没有继续重复点击同一旧通知。
+
+根据 [微软 Toast schema](https://learn.microsoft.com/windows/apps/design/shell/tiles-and-notifications/toast-schema) 的 `activationType=protocol`，新原生通知使用 `dsh-pharos://activate/<本地端口>/<48位十六进制票据>`。票据随机生成、只消费一次，目标会话和客户端标识留在 host 内存，不写入 URI 或诊断输出。固定本地 .NET 入口严格校验参数数量、scheme、主机名、端口及票据；只向 `127.0.0.1` 的 `/pharos/api/native-activation` 发 JSON，不接受命令或跳转地址，不使用代理或 HTTP 重定向。接口保留本地来源、请求类型、自定义头和票据校验。
+
+首次发送前用系统 Windows PowerShell 编译插件附带的 C# 源码，在 `%LOCALAPPDATA%/dsh-pharos/activation/` 缓存无控制台入口；在 HKCU 注册独立协议，并读回固定命令。检查 HKCU/HKLM 同名协议，其他应用所有的关联拒绝覆盖；不修改 DSH 的 `dsh://`、系统执行策略或通知设置。协议所有者为 `Leo-Cjw/dsh-pharos`，关联与缓存持续存在，卸载后不会自动删除。清理时须核对所有者；旧通知不支持 host 退出后的冷启动导航。
+
+票据到达后先由 host 按当前 autoFocus 开关恢复 DSH，再向原客户端发送包含原始 sessionId 的激活帧；客户端复用导航服务。SSE 暂时断线时保留有上限的激活帧供重连处理；客户端按本实例键消费一次，卸载释放其缓存。关闭 autoFocus 时不发窗口恢复请求，仍可后台导航。历史淘汰、删除读回、失败单次页内反馈和工作流最近三条规则继续保留。
+
+已在本机安装并正常重启：协议所有者和固定命令读回正确，编译入口存在。独立本地 HTTP 服务实测编译后的入口确实发出一条正确 JSON 请求并成功退出；测试没有向 DSH 发激活请求，不计作真实点击验收。自动化另覆盖 URI 拒绝规则、一次性票据、无密钥诊断、来源围栏、窗口恢复一次、SSE 重连补交和卸载清除缓存；新增重连测试通过。
+
+第十一轮通知正文为“协议激活定位11：请点击这条通知正文，返回 Pharos 通知验收主会话。”，目标 `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc`，原生 ID `pharos-native-ba35cd6f179d3b2fdbe87f22`。发出前电脑工具确认 strat、最小化 DSH、Sourcetree 前台。实际 XML 读回为 protocol，URI 格式符合预期；host 有 show ack 与 TimedOut，监听仍保留。待用户实际点击并核验 protocol-activated、前台恢复和从 strat 导航。不能把编译入口的独立测试当作系统点击通过。
+
+此候选在新增 SSE 重连用例后重新跑完整 `npm test`，通过 M1 336 项、host 353 项及原生助手测试；打包检查包含 31 个文件，新增三个激活源码文件均入包，不预置编译 exe。重新拉取的 main 仍为 `e230be1326dfdd4908cb25b026b11f99b8e6f2a6`，已包含在当前分支。实机工作流点击和配置恢复仍需收尾。
+
+第十一轮用户确认恢复 DSH 并成功跳转；在手动激活前，只读窗口标题已经是验收主会话。host 对同 ID 记录 Activated、remove ack，未记录 protocol-activated，因此只能确认原生 Activated 到达，不能声称本次票据 HTTP 路径被实际消费。随后 Debug 记录 `from=windows-native, outcome=navigated, via=uiWorkspace, alreadyCurrent=false, currentAtClick=session-52766c78-2c8b-4911-9f78-d20217e418ad`，目标与当前均为 `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc`。这证明真实跨会话导航；最终候选同时改了 protocol XML、host 恢复和补交，未做单变量对照，不将成功唯一归因于协议注册。原始证据为 `pharos-native-adaptation/protocol11-after-click.txt`。
+
+### 第十二轮工作流容量与子会话点击（2026-10-12，通过）
+
+正常重启后临时开启 workflowEvents/workflowLog、关闭声音。真实 `pharos-workflow-candidate12` 收到 9 条提醒和 1 条静默日志；原生历史自动只剩十二验甲、乙、丙结束三条，均为 protocol 激活、随机短 tag，未人工删除。本轮子会话甲 ID 为 `b1af263a-25d8-4598-a2a7-33b02e0222e8`、native ID 为 `pharos-native-48465c1b1b74e54558c46019`；乙为 `14703cb7-1080-46b4-a157-d4ebb7c9b79f`，丙为 `3d31d6ca-543d-4f0b-9fcc-714805c721e0`。
+
+点击前 Debug 读回三个 native 映射与 SSE 一致、当前为 strat、navLog=[]、autoFocus=true；关闭设置后观察 strat、最小化 DSH、把 Sourcetree 置于前台。已请求用户点击十二验甲结束正文，等待实际前台与子会话导航结果。证据为 `pharos-native-adaptation/candidate12-before-click.txt`、`pharos-workflow-candidate12-sse.jsonl`、`pharos-candidate12-history.json`。容量通过不代替点击通过。
+
+用户点击后确认跳转成功。手动激活前只读窗口标题已变成子会话，host 记录甲的 Activated 和 remove ack，独立 SSE 收到 `sessionId=b1af263a-25d8-4598-a2a7-33b02e0222e8, action=activated, focusHandled=true`。随后实际主界面显示对应子会话 ID 与回复“十二验甲”，Debug 记录 `outcome=navigated, from=windows-native, via=uiWorkspace, alreadyCurrent=false, currentAtClick=session-52766c78-2c8b-4911-9f78-d20217e418ad`，当前为甲的完整 ID。此轮指定子会话跨会话导航通过，未将窗口恢复或历史减少单独作为导航证据。原始记录为 `candidate12-click-sse.jsonl` 和 `candidate12-after-click.txt`。
+
+随后在客户端关闭自动聚焦，服务端读回 autoFocus=false；保留同轮乙的通知（创建时自动聚焦开启，可验证点击读取当前开关）。再次观察 strat、最小化、Sourcetree 前台，请用户点击十二验乙结束，并保持不手动打开 DSH，以核验只后台导航。
+
+### 协议候选撤回与前台激活对照（2026-10-12，第十三轮准备）
+
+用户点击后提供 Windows 提示截图：“获取打开此 dsh-pharos 链接的应用”。只读注册表确认协议命令和编译 exe 存在，Win32 关联查询指定 open verb 可解析；但同一个 WinRT `QueryUriSupportAsync` 对 dsh 返回 Available、对 dsh-pharos 返回 NotSupported。补注册能力声明、应用入口和同步刷新关联仍未转为可用；临时 scheme/目标 exe 对照也未解决。具体为何未被 WinRT 识别仍未确定，不能声称注册表读回就证明真实 URI 激活可用。
+
+协议方案与激活入口文件已从当前源码移除，`/native-activation` 已撤销；改为 `activationType=foreground, launch=<随机原生ID>` 的对照，保留同一 Activated/会话映射、host 恢复及 SSE 重连机制。这不打开任何自定义 URI，不把之前协议候选的主/子会话成功沿用到新候选。完整 npm test 重新通过 M1 336 项、host 353 项及原生助手测试。
+
+期间 DSH 另一个会话正在安装插件，未直接中断；随后出现 renderer crashed 对话框，诊断报告只确认渲染进程崩溃，未确认具体原因。通过正常重启入口加载新候选，未使用“禁用第三方插件”按钮。新候选实机点击与配置恢复仍待继续。
+
+### 第十四、十五轮 COM 与快捷方式对照（2026-10-12）
+
+第十三轮用户反馈停留在 strat，host 只有 show ack 和 TimedOut，没有 Activated；foreground 对照未通过。当前候选改用独立 `LeoCjw.DshPharos` AUMID 和 COM 类工厂，在助手运行期间保持 MTA 监听，点击参数只包含本机端口和 48 位随机票据。接口恢复 `/native-activation`，保留一次性消费、来源围栏、host 恢复和 SSE 重连补交。C# 编译后的独立 COM 传输实验成功向隔离本机服务投递一次正确 JSON；这是传输验证，不代表系统通知验收。仅靠注册表冷启动的 COM 实验返回 class-not-registered，原因未确定，因此不宣称退出 host 后恢复旧会话。
+
+第十四轮通知在系统历史和平台日志中存在，Notifier.Setting=Enabled，但用户在通知中心看不到独立应用组。新增 Pharos 独立开始菜单快捷方式，写入并读回 `System.AppUserModel.ID` 与 `System.AppUserModel.ToastActivatorCLSID`；原 DSH 快捷方式哈希不变。[微软快捷方式说明](https://learn.microsoft.com/en-us/windows/win32/shell/enable-desktop-toast-with-appusermodelid)和[激活 CLSID 属性](https://learn.microsoft.com/en-us/windows/win32/properties/props-system-appusermodel-toastactivatorclsid)是实现依据。对照说明本机仅有历史条目不能证明通知中心可见；没有把这一差异推广为所有 Windows 版本的唯一原因。
+
+用户提供的截图确认第十四轮 B 通知以 `DSH Pharos Notifications` 显示，正文含“COM 快捷方式对照14B”。本轮自动聚焦关闭，用户点击后报告未弹 DSH。host 记录 `com-activated` 和 remove ack，原生 ID 为 `pharos-native-5bfb6da2021e651561a77fe3`。在手动恢复窗口前，只读窗口标题已变为验收会话；随后 Debug 记录 `outcome=navigated, from=windows-native, via=uiWorkspace, alreadyCurrent=false, currentAtClick=session-52766c78-2c8b-4911-9f78-d20217e418ad`，目标与当前为 `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc`。后台跨会话导航通过；不将手动恢复窗口计作自动聚焦通过。
+
+第十五轮在设置页开启自动聚焦，服务端确认 true，再从 strat 最小化并置 Sourcetree 前台。用户点击后仍未恢复 DSH。host 确认该条 COM 回调到达，原生 ID 为 `pharos-native-85efc679980c336b4572e3cb`；独立 SSE 记录却是 `autoFocus=false, focusHandled=false`，后台会话已经切换。源码确认设置保存仅写 localStorage 和 host，没有同步当前窗口内存配置；同窗口 localStorage 写入不会触发 storage 事件。新增保存后调用既有配置 API 的同步，回归测试覆盖关闭→开启、下一条原生载荷及再次关闭。此修复待重载后的新通知窗口恢复验收，不能把落盘 true 算作客户端运行时 true。
+
+当前自动化通过 M1 341 项、host 353 项及原生助手测试，另在隔离临时目录和专用随机测试注册表键运行实际安装脚本，验证重复安装、保留已有值、真实快捷方式属性读回、其他所有者拒绝及共享 RegisteredApplications 不变。测试不注册系统 COM、不发送通知、不启动 DSH。
+
+协议实验曾因 `New-Item -Force` 清空本机共享 RegisteredApplications 的值；已撤回实验并恢复可由现存能力声明确认的 WorkBuddy 项。事故前没有完整备份，其他原值未知，不能声称完整恢复。该环境恢复限制与通知功能验收分开记录；当前生产安装脚本使用 CreateSubKey，仅写两个 Pharos 私有键及独立快捷方式，不访问 RegisteredApplications。
+
+### 第十六至十八轮：重载与多通知交叉验收（2026-10-13）
+
+正常重启后确认新宿主、安装目录 18 个文件与候选一致，autoFocus/sound=true。第十六轮从 strat 发送主会话通知，原生 ID `pharos-native-c672e48e4c44269afabc2c29`；横幅超时后实际 COM 激活到达，SSE 为 `autoFocus=true, focusHandled=true`，Debug 记录从 strat 通过 uiWorkspace 导航到验收主会话，alreadyCurrent=false。focusHandled 表示宿主已发起固定恢复入口，不单独证明 Windows 当时的前台状态。
+
+第十七轮子会话重试的 `pharos-native-beffab3c0c2a1e16fdf6f55e` 收到 UserCanceled/closed 并移除，没有该 ID 的 Activated，故不计为通过。随后用户收到并成功跳转的是“你好”会话通知；原生 ID 与目标不同，没有把该结果误记到第十七轮。
+
+按用户要求验证多个通知是否串信息。发出前 Debug 确认当前 `session-52766c78-2c8b-4911-9f78-d20217e418ad`（strat）、自动聚焦开启、nativeEntries=[]；关闭设置后最小化 DSH，把 Sourcetree 置前台。通过现有 remote 入口连续发送 A/B/C 三条，系统历史同时保留三条、正文标记与 tag 独立；系统模式当时为 AlarmsOnly，因此没有声称三条横幅都可见。
+
+| 标记 | 历史与激活使用的原生 ID | 原始目标 | 实际点击与用户反馈 |
+| --- | --- | --- | --- |
+| C | `pharos-native-d7b2ff0d8b4da4eb181f5463` | `b1af263a-25d8-4598-a2a7-33b02e0222e8` | 第一次，进入 b1af263a 子会话 |
+| A | `pharos-native-78b251d2083311d10e06e882` | `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc` | 第二次，进入“这是 Pharos issue #1 的通知验收” |
+| B | `pharos-native-d97f561708625502cf00f184` | `session-52766c78-2c8b-4911-9f78-d20217e418ad` | 第三次，用户称 start；进程窗口标题只读核实为 strat |
+
+三条分别收到上述 ID 的 com-activated/remove ack，独立 SSE 对应 key 后缀 7/5/6、原始目标与次序 C/A/B，均为 autoFocus=true、focusHandled=true。用户确认三个实际目标；助手在结果核验前没有手动恢复或切会话。通知映射交叉验收通过、最终 entries=0。此次没有重新创建工作流 agent；验证的是三条系统通知同存与已有主/子会话导航，不冒充新一轮工作流上游事件验收。首次点击是否自动恢复前台未获得单独明确答复，仍不将 focusHandled 当成完整前台测量。
+
+新增回归分别在真实 broker 和浏览器客户端测试三条不同目标并发发送、C/A/B 乱序消费、错目标帧不得消费入口、重复点击只导航一次，消费后归零。设置同步反向实验去掉同步时恰好两项行为断言失败，原始源码已按字节恢复。最终完整 npm test：原 v0.3、M1 349 项、host 353 项及 Windows 原生助手/隔离安装测试全部通过；打包包含 31 个文件、激活源码完整、不预置 exe。最新 origin/main 仍为 e230be1，已在开发分支内。
+
+最终配置读回：enabled/toast/autoFocus/sound/currentQuiet=true，workflowEvents/workflowLog=false；原生助手 pending=0、entries=0。当前用户注册表、独立快捷方式和缓存按 README 说明保留。旧协议实验共享注册项恢复缺少原始完整备份，限制未消除。
 
 ## 再次排查
 

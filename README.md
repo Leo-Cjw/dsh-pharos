@@ -74,7 +74,9 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 
 Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
-Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知。助手在横幅超时后保留原生 Activated 回调，点击经 SSE 返回原始会话 ID，再调用 `uiWorkspace.openSession`；启用自动聚焦时仍通过固定 `dsh://open` 恢复最小化窗口。关闭自动聚焦时只切换后台会话。通知使用随机短 ID，不把会话 ID 放进系统 tag，不注册新协议，也不修改系统执行策略。
+Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。启用自动聚焦时通过 DSH 既有的固定 `dsh://open` 恢复窗口。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时只在后台切换会话。
+
+首次发送会在当前用户注册 Pharos 自有的 AUMID 和 COM CLSID，生成的激活程序缓存于 `%LOCALAPPDATA%\dsh-pharos\notifications`。写入仅限两个带所有者标记的私有注册表键，发现其他所有者时停止原生发送；不重建共享注册表键、不修改默认协议关联。另在当前用户开始菜单创建独立的 `DSH Pharos Notifications.lnk`，设置应用 ID 与激活 CLSID 并读回核验，保留 DSH 原快捷方式；同名快捷方式属于其他应用时拒绝覆盖。注册、快捷方式和缓存会留在本机，退出时释放 COM 监听并清理本轮通知入口；卸载插件不会自动删除这些私有注册及缓存。此通道要求 DSH host 正在运行，不支持退出后冷启动恢复旧会话。曾测试的 `dsh-pharos://` 协议候选因 Windows 报“没有可打开此链接的应用”已撤回。当前 COM 候选已验证关闭自动聚焦时后台跨会话导航，以及三条通知同时保留、乱序点击分别进入对应主/子会话；此结果不代表所有 Windows 版本或免打扰模式下横幅都可见。
 
 工作流只保留当前客户端最近 3 条入口；淘汰时删除本应用 Pharos 组的指定历史并读回核实，删除失败时停止本次发送并显示页内反馈。SSE/Webhook 的原始工作流事件仍完整投递，普通通知不受这项三条规则影响。Debug 的 `desktopNativeNotifications`、`nativeNotifications` 和 `recentNotifications[].nativeId` 可确认通道与目标；nativeId 表示系统 API 已接收，不单独证明横幅可见。`GET /pharos/api/native-notifications`（请求头 x-pharos-desktop:1）提供助手状态和最近 20 条原生事件，便于区分超时关闭与实际激活。助手故障不会重复发送 Web 系统通知，而是补一次页内反馈；助手最多保留 512 个未释放条目，用户关闭或点击后释放。macOS 与普通浏览器仍用原来的通知通道。没有新 host 时保留旧 Web 路径及 `workflowHistoryCleanup` 诊断，其历史点击仍可能受宿主关闭事件影响。退出或重启后无法延续旧点击监听，旧版本历史不会自动接管。
 

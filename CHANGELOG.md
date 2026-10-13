@@ -10,9 +10,11 @@
 - `completionUnread` 完成信号与 running/SSE 共用完成时机、子代理过滤和节流，防止绕过 off/hidden 策略或重复提醒。隐藏页面同时检查 visibilityState。
 - 接住 Web Notification 的异步 `error`，只补一次页内提示，不重复响铃；通知诊断区分请求、显示回调、失败和静默。设置页明确测试按钮只验证页内提示。
 - 修正 host 测试的 Windows file URL 转换和根路径预期，使完整测试可以在 Windows 运行。
-- Windows Electron 通知启用 `requireInteraction`，避免横幅超时后的 Web close 移除点击监听；点击通过本机 host 打开固定 `dsh://open`，由 DSH 恢复最小化窗口。macOS 与普通浏览器不启用这两个分支。新增恢复接口的来源校验、平台分支及开关回归。
-- Windows 工作流通知使用每条唯一的短 tag，避免复用 ID 时旧通知关闭事件清掉新通知的点击监听。保留最近 3 条入口，本机 host 通过系统 Windows PowerShell 批量调用原生 History.Remove 删除旧进展并读回核实；失败重试与清理状态进入 Debug。全部 SSE/Webhook 事件仍完整投递，其他通知与平台不使用这些 tag。保留 requireInteraction 和原始会话点击跳转。
+- Windows Electron 在新 host 支持时使用隐藏的原生 Toast 助手，以独立 AUMID 显示并保持 COM 激活监听，超时后保留一次性随机票据入口。host 按当前自动聚焦开关通过固定 `dsh://open` 恢复窗口，再经 SSE 让原客户端导航；断线重连补交、重复消费拒绝。当前用户仅注册 Pharos 自有 AUMID/CLSID、独立开始菜单快捷方式并缓存激活程序，不修改共享注册表键、DSH 原快捷方式或注册新 URI 协议；不支持退出后冷启动恢复旧会话。macOS 与普通浏览器继续使用原通道；没有新 host 时保留 Web `requireInteraction` 兼容路径。
+- Windows 工作流保留当前客户端最近 3 条入口。每条使用随机短 tag，原始会话 ID 留在 host 映射；淘汰时删除本应用 Pharos 组指定历史并读回，删除失败停止新发送。助手失败只补一次页内提示，不重复发送 Web 通知。SSE/Webhook 原始事件仍完整投递；旧 Web 路径保留独立历史清理及诊断。
 - 控制台 API 版本复用设置页的版本来源，与包版本一致；补齐完成节流抑制不延长窗口、诊断记录及窗口恢复子进程 `unref()` 的回归测试。
+- 设置保存后同步当前窗口运行中的通知配置，修复自动聚焦开关已落盘但通知仍使用旧值的问题，无需重启才能应用。
+- 补齐三条不同目标通知的并发发送、乱序激活、错误目标拒绝及重复消费回归；本机三条通知 C→A→B 点击均对应原始主/子会话，没有错配。
 
 验证范围与剩余限制见 [Windows 验收记录](docs/issue-1-windows-notifications.md)。
 

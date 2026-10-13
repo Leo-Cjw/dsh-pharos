@@ -2,6 +2,12 @@
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$initial=[Console]::In.ReadLine()|ConvertFrom-Json
+if($initial.source -isnot [string] -or $initial.source.Length -gt 65536) { throw 'invalid bundled activation source' }
+$hash=[Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($initial.source))
+$hash=([BitConverter]::ToString($hash)).Replace('-','').ToLowerInvariant()
+if($hash -cne $activationHash) { throw 'bundled activation source mismatch' }
+Add-Type -TypeDefinition $initial.source
 $null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]
 $null = [Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]
 $null = [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]
@@ -41,7 +47,8 @@ public class PharosToastSink {
  public void Failed(object sender, object args) { PharosToastEvents.Events.Enqueue("failed:"+Id); }
 }
 '@
-$appId='electron.app.DeepSeek Harness'
+$appId='LeoCjw.DshPharos'
+$activationListening=$false
 $notifier=[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)
 $history=[Windows.UI.Notifications.ToastNotificationManager]::History
 $toasts=@{}
@@ -65,10 +72,15 @@ try {
     if($command.id -cnotmatch '^pharos-native-[0-9a-f]{24}$') { throw 'invalid native id' }
     if($command.op -ceq 'show') {
      if($toasts.Count -ge 512 -or $command.title -isnot [string] -or $command.body -isnot [string]) { throw 'invalid native notification' }
+     if($command.activation -cnotmatch '^[0-9]{1,5}/[0-9a-f]{48}$') { throw 'invalid activation arguments' }
+     if(-not $activationListening) {
+      if(-not [PharosNotificationActivation]::StartListener()) { throw 'native COM activation listener unavailable' }
+      $activationListening=$true
+     }
      $title=[Security.SecurityElement]::Escape($command.title)
      $body=[Security.SecurityElement]::Escape($command.body)
      $xml=[Windows.Data.Xml.Dom.XmlDocument]::new()
-     $xml.LoadXml('<toast scenario="reminder"><visual><binding template="ToastGeneric"><text>'+ $title +'</text><text>'+ $body +'</text></binding></visual><actions><action activationType="system" arguments="dismiss" content="关闭"/></actions><audio silent="true"/></toast>')
+     $xml.LoadXml('<toast scenario="reminder" activationType="foreground" launch="'+$command.activation+'"><visual><binding template="ToastGeneric"><text>'+ $title +'</text><text>'+ $body +'</text></binding></visual><actions><action activationType="system" arguments="dismiss" content="关闭"/></actions><audio silent="true"/></toast>')
      $toast=[Windows.UI.Notifications.ToastNotification]::new($xml)
      $toast.Tag=$command.id; $toast.Group='Pharos'
      # Keep the object/delegate after Dismissed/TimedOut. Action Center can still activate it.
@@ -91,4 +103,5 @@ try {
  }
 } finally {
  foreach($id in @($toasts.Keys)) { try { RemoveToast $id } catch {} }
+ if($activationListening) { [PharosNotificationActivation]::StopListener() }
 }
