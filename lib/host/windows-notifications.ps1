@@ -8,6 +8,9 @@ $hash=[Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8
 $hash=([BitConverter]::ToString($hash)).Replace('-','').ToLowerInvariant()
 if($hash -cne $activationHash) { throw 'bundled activation source mismatch' }
 Add-Type -TypeDefinition $initial.source
+if(($initial.desktopPid -is [int] -or $initial.desktopPid -is [long]) -and $initial.desktopPid -gt 0 -and $initial.desktopPid -le [int]::MaxValue) {
+ $null=[PharosNotificationActivation]::ConfigureDesktopProcess($initial.desktopPid)
+}
 $null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]
 $null = [Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]
 $null = [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]
@@ -53,6 +56,7 @@ $notifier=[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifi
 $history=[Windows.UI.Notifications.ToastNotificationManager]::History
 $toasts=@{}
 function Reply($value) { [Console]::Out.WriteLine(($value|ConvertTo-Json -Compress)); [Console]::Out.Flush() }
+Reply @{event='desktop-identity';desktopPid=[PharosNotificationActivation]::DesktopProcessId}
 function RemoveToast([string]$id) {
  if($toasts.ContainsKey($id)) { $notifier.Hide($toasts[$id]); $toasts.Remove($id) }
  [PharosToastEvents]::Forget($id)

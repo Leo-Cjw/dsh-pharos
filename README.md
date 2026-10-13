@@ -74,11 +74,11 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 
 Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
-Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。启用自动聚焦时通过 DSH 既有的固定 `dsh://open` 请求恢复窗口。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时只在后台切换会话。当前 Unreleased 候选三条通知乱序导航已通过；首次从 Sourcetree 自动恢复前台，后两次仅闪烁任务栏，连续点击的前台恢复仍未修复，PR 尚不能按完整窗口恢复验收收口。
+Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。每次 COM 点击先核验存活票据和当前自动聚焦开关，再向通过名称、会话与启动时间校验的宿主父进程（DSH 主进程）移交前台权限，随后消费票据并通过固定 `dsh://open` 请求恢复窗口。权限按次交接，不向所有进程授权，不改系统前台锁策略。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时不授权、只在后台切换会话。当前 Unreleased 候选已通过第十九轮 C→A→B 连续点击：每次从 Sourcetree 自动恢复 DSH，并导航到正确主/子会话；此前仅闪烁任务栏的问题已在本机复验通过。
 
 首次发送会在当前用户注册 Pharos 自有的 AUMID 和 COM CLSID，生成的激活程序缓存于 `%LOCALAPPDATA%\dsh-pharos\notifications`。写入仅限两个带所有者标记的私有注册表键，发现其他所有者时停止原生发送；不重建共享注册表键、不修改默认协议关联。另在当前用户开始菜单创建独立的 `DSH Pharos Notifications.lnk`，设置应用 ID 与激活 CLSID 并读回核验，保留 DSH 原快捷方式；同名快捷方式属于其他应用时拒绝覆盖。注册、快捷方式和缓存会留在本机，退出时释放 COM 监听并清理本轮通知入口；卸载插件不会自动删除这些私有注册及缓存。此通道要求 DSH host 正在运行，不支持退出后冷启动恢复旧会话。曾测试的 `dsh-pharos://` 协议候选因 Windows 报“没有可打开此链接的应用”已撤回。当前 COM 候选已验证关闭自动聚焦时后台跨会话导航，以及三条通知同时保留、乱序点击分别进入对应主/子会话；此结果不代表所有 Windows 版本或免打扰模式下横幅都可见。
 
-工作流只保留当前客户端最近 3 条入口；淘汰时删除本应用 Pharos 组的指定历史并读回核实，删除失败时停止本次发送并显示页内反馈。SSE/Webhook 的原始工作流事件仍完整投递，普通通知不受这项三条规则影响。Debug 的 `desktopNativeNotifications`、`nativeNotifications` 和 `recentNotifications[].nativeId` 可确认通道与目标；nativeId 表示系统 API 已接收，不单独证明横幅可见。`GET /pharos/api/native-notifications`（请求头 x-pharos-desktop:1）提供助手状态和最近 20 条原生事件，便于区分超时关闭与实际激活。助手故障不会重复发送 Web 系统通知，而是补一次页内反馈；助手最多保留 512 个未释放条目，用户关闭或点击后释放。macOS 与普通浏览器仍用原来的通知通道。没有新 host 时保留旧 Web 路径及 `workflowHistoryCleanup` 诊断，其历史点击仍可能受宿主关闭事件影响。退出或重启后无法延续旧点击监听，旧版本历史不会自动接管。
+工作流只保留当前客户端最近 3 条入口；淘汰时删除本应用 Pharos 组的指定历史并读回核实，删除失败时停止本次发送并显示页内反馈。SSE/Webhook 的原始工作流事件仍完整投递，普通通知不受这项三条规则影响。Debug 的 `desktopNativeNotifications`、`nativeNotifications` 和 `recentNotifications[].nativeId` 可确认通道与目标；nativeId 表示系统 API 已接收，不单独证明横幅可见。`GET /pharos/api/native-notifications`（请求头 x-pharos-desktop:1）提供助手状态和最近 20 条原生事件；`desktop-identity` 记录绑定的主进程，`com-activated.foregroundGranted` 记录本次授权 API 结果，均不能单独代替前台实机验收。助手故障不会重复发送 Web 系统通知，而是补一次页内反馈；助手最多保留 512 个未释放条目，用户关闭或点击后释放。macOS 与普通浏览器仍用原来的通知通道。没有新 host 时保留旧 Web 路径及 `workflowHistoryCleanup` 诊断，其历史点击仍可能受宿主关闭事件影响。退出或重启后无法延续旧点击监听，旧版本历史不会自动接管。
 
 > **改动自动保存**（v0.6.2）：设置页不再有底部「保存设置」按钮 —— 按钮在最底下，改完没滚到底就切走会以为没生效。现在**任何改动停止约 0.8 秒后自动落盘**（连续输入合并为一次写入），底部仅显示保存状态。host 离线时写入本地偏好层。
 

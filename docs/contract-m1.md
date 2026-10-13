@@ -239,7 +239,7 @@ order 实测占用：general `0` / models `10` / plugins `15` / agent-presets `2
 | `/native-notifications` | GET | 助手 PID、pending/entries 和最近 20 条原生事件；不返回票据或正文 |
 | `/native-notifications` | POST | `{clientId,key,kind,sessionId,title,body,autoFocus}`；enabled/toast 关闭返回 requested=false；成功返回 requested=true 和随机原生 id |
 | `/native-notifications` | DELETE | `{clientId}`；释放该客户端入口及其激活重放缓存 |
-| `/native-activation` | POST | `{ticket}`；48 位小写十六进制；消费一次返回 activated=true，未知/过期/重复票据 410，格式非法 400 |
+| `/native-activation` | POST | prepare：`{ticket,phase:'prepare'}` 核验存活入口并返回 `{autoFocus}`，不消费或恢复窗口；提交：`{ticket,foregroundGranted?}` 消费一次并派发激活；ticket 为 48 位小写十六进制，未知/过期/重复票据 410，格式或 phase 非法 400 |
 | `/workflow-history` | POST | `{tags}`；仅接受旧 Web 工作流短标识，精确删除兼容路径的历史，不清空其他应用或整个通知中心 |
 
 原生发送字段限制：clientId 匹配 `^pharos-wf-[a-z0-9]+-[a-z0-9]+$`，最长 48；key 以 clientId 加连字符开头，仅小写字母/数字/连字符，最长 60；kind 为 done/attention/error/interrupted/limit/job/remote/test/workflow；sessionId 非空且最长 512；title 非空且最长 256；body 字符串最长 8192；autoFocus 为布尔值。原生 tag 是 `pharos-native-` 加 24 位十六进制，launch 只含本机端口/48 位票据；会话 ID 不进入 tag 或 launch。GET config 的 `desktopNativeNotifications` 是能力元数据，客户端不作为偏好保存；当前设置保存成功后同步同窗口运行时配置。
@@ -255,15 +255,18 @@ interface NativeNotificationFrame {
   clientId: string; key: string; sessionId: string;
   autoFocus: boolean;
   focusHandled: boolean; // 固定恢复请求已发起，不是前台恢复测量
+  foregroundGranted: boolean; // 当次 COM 授权 API 成功，不是前台恢复测量
 }
 ```
 
 host 最多缓存 128 条 activated 帧用于 SSE 重连补交；客户端只接受自身 clientId、匹配 key 与原始 sessionId 的入口，消费一次后删除。错误目标不能消费正确入口；重复帧不再次导航。退出/卸载释放所属入口。激活在 enabled 关闭时不派发；autoFocus 同时要求发送时开关和当前 host 开关，客户端也检查当前开关。关闭自动聚焦仍可后台导航。
 
+助手首次启动仅从私有 stdin 接收 host 的 process.ppid，不接受网络请求指定 PID。绑定要求同 Windows 会话、进程名为 DeepSeek Harness，并记录启动时间防止 PID 复用。每次 COM 回调先 prepare；仅返回 autoFocus=true 时调用 AllowSetForegroundWindow 向该主进程授权，随后提交激活。授权失败不阻断会话导航，不向所有进程授权、不修改系统前台锁。旧单步 `{ticket}` 提交仍兼容，未授权时 foregroundGranted=false。host 提交阶段再次检查当前开关；prepare 与提交间票据被淘汰时提交返回 410，不再次导航。
+
 TimedOut 保留票据与监听，UserCanceled/failed/activated 释放对应入口。工作流跨工作流名称共享每客户端最近 3 条；发送第四条前先精确淘汰并读回，失败停止新发送。普通通知不受这项三条规则限制；助手总容量 512、命令超时 15 秒。助手错误补一次 DOM 提示，不重发 Web 通知或提示音。旧 Web 路径的 workflowNotificationSlots/workflowHistoryCleanup 不能替代原生通道诊断。
 
 ### 11.4 当前验收边界
 
-完整本地测试通过原 v0.3、M1 349 项、host 353 项及 Windows broker/回调解析/助手/隔离安装测试。实际三条通知 C→A→B 分别导航到指定子会话、主会话和 strat，未串信息；首次从 Sourcetree 自动恢复前台通过，后两次只闪烁任务栏，连续前台恢复失败。自动化的恢复请求成功不能覆盖这一实机失败，PR 尚不能按完整窗口恢复验收收口。此次未重新运行工作流上游事件、未实机重测 macOS。
+完整本地测试通过原 v0.3、M1 349 项、host 353 项及 Windows broker/回调解析/助手/隔离安装测试。新增真实 C# 本机 HTTP 传输测试，授权用假委托，验证三次逐次 prepare→授权→提交、关闭开关/过期票据不授权、授权失败仍导航；测试不聚焦窗口、不调用真实前台授权 API。第十九轮实际三条通知 C→A→B 均从 Sourcetree 自动恢复 DSH，分别进入指定子会话、主会话和 strat，用户验收通过，无串信息。此前第十八轮仅闪烁任务栏的结果作为历史保留；不把授权 API 返回值代替前台实机确认。此次未重新运行工作流上游事件、未实机重测 macOS。
 
 旧协议实验的共享注册项完整恢复仍无法确认，当前私有安装隔离测试不等同于事故恢复。逐轮证据及当前结论见 [Windows 验收记录](issue-1-windows-notifications.md)，操作说明见 [工作流 SOP](sop-workflow-events.md)。

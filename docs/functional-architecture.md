@@ -8,13 +8,13 @@
 
 Windows Electron 在新 host 支持时，由浏览器策略层向同源 `/pharos/api/native-notifications` 投递，再由 host 惰性启动隐藏的 Windows PowerShell Toast 助手。macOS/普通浏览器仍走既有 Web 通知；没有新 host 时保留旧 Web 兼容路径。Windows 图片通知仍未实现。
 
-助手持有 COM 类工厂与通知对象；横幅 TimedOut 不释放点击入口。每条通知使用随机短 tag 和一次性票据，原始会话 ID 留在 host 内存映射。点击经 `/native-activation` 消费票据，再把 `kind:'native-notification'` 帧直接交给 SSE 中的原客户端，调用 `uiWorkspace.openSession`；激活帧不进入提醒总线或 Webhook，不重复响铃。自动聚焦同时尊重发送时开关和当前 host 开关，通过固定 `dsh://open` 请求恢复窗口。
+助手持有 COM 类工厂与通知对象；横幅 TimedOut 不释放点击入口。每条通知使用随机短 tag 和一次性票据，原始会话 ID 留在 host 内存映射。点击先经 `/native-activation` prepare 检查票据与当前开关，不消费票据；启用自动聚焦时在 COM 回调内按次向已验证身份/启动时间的 DSH 主进程授予前台权限，再提交激活，host 经固定 `dsh://open` 请求恢复窗口，把 `kind:'native-notification'` 帧直接交给 SSE 中的原客户端，调用 `uiWorkspace.openSession`。激活帧不进入提醒总线或 Webhook，不重复响铃；自动聚焦同时尊重发送时开关和当前 host 开关。
 
 模块职责：[`windows-notifications.js`](../lib/host/windows-notifications.js) 管映射、容量和助手命令；[`windows-notifications.ps1`](../lib/host/windows-notifications.ps1) 管 Toast/历史；[`notification-activation.cs`](../lib/host/notification-activation.cs) 管 COM 回调与固定格式本机 HTTP；[`notification-activation.js`](../lib/host/notification-activation.js) / [安装脚本](../lib/host/notification-activation.ps1) 管自有注册与快捷方式；[`desktop.js`](../lib/host/desktop.js) 只请求既有 DSH 协议恢复入口。HTTP/SSE 仍用既有 webServer，不另开服务端口、不修改 DSH asar。
 
 安装资源限当前用户自有 AUMID/CLSID、独立开始菜单快捷方式和本地缓存激活程序，校验所有者并读回，不访问共享 RegisteredApplications。这些资源不会随卸载自动删除；退出释放监听与本轮入口，不支持冷启动恢复旧会话。工作流每客户端最近 3 条，淘汰精确删除本应用 Pharos 组历史并核实，失败停止新发送；助手总容量 512。SSE 激活重放最多 128 条，客户端按 key 消费一次。
 
-实机结论：关闭自动聚焦时后台跨会话导航通过；三条通知 C→A→B 对应原始主/子会话，没有串信息。首次从 Sourcetree 自动恢复前台通过，后两次只闪烁任务栏，连续点击前台恢复失败。`focusHandled` 是恢复请求已发起，不能当成前台测量。当前 PR 尚不能按完整窗口恢复验收收口；旧协议实验造成的共享注册项完整恢复也无法确认。具体路由/安全契约见 [实现契约 §11](contract-m1.md)，配置/容量见 [工作流 SOP](sop-workflow-events.md)，逐轮证据见 [issue #1 记录](issue-1-windows-notifications.md)。
+实机结论：关闭自动聚焦时后台跨会话导航通过；第十八轮三条通知映射通过，但后两次仅闪烁任务栏。按次交接权限后，第十九轮 C→A→B 每次都从 Sourcetree 自动恢复 DSH，进入原始主/子会话，没有串信息，用户验收通过。`focusHandled` 是恢复请求已发起，`foregroundGranted` 是授权 API 成功，都不能单独当成前台测量。旧协议实验造成的共享注册项完整恢复仍无法确认，与本次功能验收分开记录。具体路由/安全契约见 [实现契约 §11](contract-m1.md)，配置/容量见 [工作流 SOP](sop-workflow-events.md)，逐轮证据见 [issue #1 记录](issue-1-windows-notifications.md)。
 
 ---
 

@@ -2,18 +2,18 @@
 
 本记录对应 [issue #1](https://github.com/Leo-Cjw/dsh-pharos/issues/1)。2026-10-10 在用户的 Windows DSH 桌面环境定位并验证；源码基线为插件 0.6.2。以下将实机证据和模拟测试分开。
 
-当前候选（2026-10-13）使用独立 AUMID `LeoCjw.DshPharos`、专用开始菜单快捷方式和运行中 COM 激活监听，并保留 host 窗口恢复与 SSE 重连补交。第十八轮三条通知同时保留，C→A→B 乱序点击均对应指定主/子会话，用户反馈与原生 ID、SSE 目标一致；最终配置已核对，完整测试通过 M1 349 项、host 353 项及 Windows 原生助手/安装测试。历史协议方案已撤回，其通过结果不沿用为当前方案通过。横幅可见性、窗口恢复请求和目标会话跳转分别记录，不用 API 请求成功冒充瞬时前台观测；本机注册表实验的完整恢复仍无法确认。
+当前候选（2026-10-13）使用独立 AUMID `LeoCjw.DshPharos`、专用开始菜单快捷方式和运行中 COM 激活监听，并保留 host 窗口恢复与 SSE 重连补交。第十九轮已补齐每次 COM 点击的前台权限交接：三条通知同时保留，C→A→B 每次从 Sourcetree 自动恢复 DSH，并进入指定主/子会话；用户验收与原生 ID、SSE 目标一致。最终配置已核对，完整测试通过 M1 349 项、host 353 项及 Windows 原生助手/安装/前台交接传输测试。历史协议方案已撤回，其通过结果不沿用为当前方案通过。横幅可见性、窗口恢复请求和目标会话跳转分别记录，不用 API 请求成功冒充瞬时前台观测；本机注册表实验的完整恢复仍无法确认。
 
-**当前结论：PR 尚不能收口。** 用户补确认首次 C 点击从 Sourcetree 自动恢复 DSH 并显示子会话；第二、第三次 A/B 点击仅闪烁任务栏，窗口没有直接弹出，会话仍正确切换。这已经是连续前台恢复失败，不再记为“缺少确认”。以下旧轮次的“待验收”保留当时上下文，当前状态以此表及第十八轮补充为准。
+**当前结论：连续前台恢复的功能阻塞已修复并实机通过。** 第十八轮后两次仅闪烁任务栏的结果保留为历史；第十九轮每次从 Sourcetree 点击 C→A→B 都自动恢复并导航到正确会话，用户确认全部按预期。以下旧轮次的“待验收”保留当时上下文，当前状态以此表及第十九轮为准；没有合并 PR、发布新版本或声称环境事故已完整恢复。
 
 | 验收项 | 当前状态 | 依据与边界 |
 | --- | --- | --- |
 | 通知显示 | 本机已观察到独立通知，有限通过 | 用户截图/实际点击；不推广为所有系统模式或版本的横幅通过 |
 | 三条通知信息与目标映射 | 通过 | C→A→B 原生 ID、SSE 目标及用户落地会话一致，无串信息 |
 | 自动聚焦关闭时后台导航 | 通过 | 第十四轮 B，恢复窗口前核验跨会话结果 |
-| 首次自动恢复前台 | 通过 | 第十八轮 C，用户明确补确认自动恢复 |
-| 连续点击前台恢复 | **失败，阻塞收口** | 第十八轮 A/B 仅闪烁任务栏；会话切换成功不能替代前台恢复 |
-| 本地完整测试 | 通过 | 原 v0.3、M1 349、host 353 与 Windows 原生/隔离安装测试 |
+| 首次自动恢复前台 | 通过 | 第十九轮 C，用户确认从 Sourcetree 自动恢复 |
+| 连续点击前台恢复 | **通过** | 第十九轮 C/A/B 每次从 Sourcetree 自动恢复并到正确目标，用户确认 |
+| 本地完整测试 | 通过 | 原 v0.3、M1 349、host 353 与 Windows 原生/隔离安装/前台交接传输测试 |
 | GitHub CI | 没有返回检查结果 | 不能记为 CI 通过 |
 | 新工作流上游全链路 / macOS 重测 | 未重测 | 当前多通知验收用 remote 和已有子会话 |
 | 旧协议实验环境事故恢复 | 无法确认完整恢复 | 原共享注册项缺少完整备份；已恢复有来源可核实的 WorkBuddy 项 |
@@ -323,6 +323,28 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 新增回归分别在真实 broker 和浏览器客户端测试三条不同目标并发发送、C/A/B 乱序消费、错目标帧不得消费入口、重复点击只导航一次，消费后归零。设置同步反向实验去掉同步时恰好两项行为断言失败，原始源码已按字节恢复。最终完整 npm test：原 v0.3、M1 349 项、host 353 项及 Windows 原生助手/隔离安装测试全部通过；打包包含 31 个文件、激活源码完整、不预置 exe。最新 origin/main 仍为 e230be1，已在开发分支内。
 
 最终配置读回：enabled/toast/autoFocus/sound/currentQuiet=true，workflowEvents/workflowLog=false；原生助手 pending=0、entries=0。当前用户注册表、独立快捷方式和缓存按 README 说明保留。旧协议实验共享注册项恢复缺少原始完整备份，限制未消除。
+
+### 第十九轮：每次交接前台权限，连续点击验收通过（2026-10-13）
+
+第十八轮 COM 点击会消费票据、启动 explorer 打开 dsh://open、再经 SSE 导航，但缺少 COM 回调到实际 DSH 主进程的前台权限交接。[Windows 文档](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-allowsetforegroundwindow)说明授权可能在后续其他用户输入时失效，因此不能只在首条通知或助手启动时授权；本轮按每次点击实现交接，不修改系统前台锁、不模拟按键、不向所有进程授权。
+
+助手仅从 host 私有 stdin 接收 process.ppid，校验同 Windows 会话、DeepSeek Harness 进程名并记录启动时间，防止 PID 被复用。每次 COM 回调先以 phase=prepare 向本机接口核验票据与发送时/当前配置，不消费票据；启用自动聚焦时调用 AllowSetForegroundWindow 指定该主进程，然后提交并消费票据、走既有恢复入口和导航。prepare/commit 间票据失效则拒绝提交；关闭自动聚焦或总开关不授权；授权失败仍保留导航路径。foregroundGranted 仅记录授权 API 结果，不能单独证明实际前台恢复。
+
+完整本地测试通过，新增测试以真实 C# HTTP 传输和假授权委托核验三次各自 prepare→授权→提交、开关关闭/过期票据不授权、授权失败继续导航。隔离测试不调用真实前台授权 API、不聚焦窗口。打包仍为 31 个文件，全部激活源码齐全、不预置 exe。
+
+只同步四个变更 host 文件并备份原版本，用户正常重启加载。本机服务 PID 19124 的父进程是 DSH 主进程 59004，helper desktop-identity 明确绑定 59004；新路由非法 phase 返回 400，确认并非旧 host。开始前只读窗口标题为 strat，用户确认已切至 Sourcetree；没有使用电脑操作工具。通过 remote 入口连续发送 A/B/C，历史读回三条同时存在：
+
+| 点击次序 / 标记 | 原生 ID | 原始目标 | 授权与实际验收 |
+| --- | --- | --- | --- |
+| 1 / C | `pharos-native-051b3fa8ad642e244433ea3c` | `b1af263a-25d8-4598-a2a7-33b02e0222e8` | foregroundGranted=true；自动恢复并进入子会话 |
+| 2 / A | `pharos-native-15c8e5e8e2c481d509d523c3` | `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc` | foregroundGranted=true；自动恢复并进入验收主会话 |
+| 3 / B | `pharos-native-85c57ad056d2d4f75bc7d0e0` | `session-52766c78-2c8b-4911-9f78-d20217e418ad` | foregroundGranted=true；自动恢复并进入 strat |
+
+每次点击前用户回到 Sourcetree，要求不手动打开 DSH，用户答复“已完成，全部按预期结果发生。”原生 ID 分别收到 com-activated/remove ack，SSE key 后缀为 2/0/1，原始目标与 C/A/B 次序一致，autoFocus/focusHandled/foregroundGranted 均 true；最终 entries=0、pending=0，窗口标题另只读核验为 strat。前台结论依据用户实际验收，不把三个 API 布尔值当作前台测量。
+
+辅助中文窗口标题采样因 Windows PowerShell 默认输出编码与 Node UTF-8 解码不一致出现乱码，不作为中文会话名称的证据。保留原始记录，目标证据取历史正文/ID、SSE 原始 sessionId 和用户确认。未重新运行工作流上游、未重测 macOS，不扩大验收范围。
+
+证据位于既有本机 pharos-native-adaptation 目录：repeat19-sent.json、repeat19-history.json、repeat19-stream.jsonl、repeat19-final-native.json、repeat19-final-config.json、repeat19-acceptance.md 及 pharos-repeat-foreground-full-tests.txt。最终 enabled/toast/autoFocus/sound/currentQuiet=true、workflowEvents/workflowLog=false；本轮未临时修改偏好，无需恢复。共享注册项事故的完整恢复仍无法确认，与功能修复分开记录。
 
 ## 再次排查
 

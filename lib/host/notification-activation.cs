@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.IO;
+using System.Diagnostics;
 
 [StructLayout(LayoutKind.Sequential)]
 public struct PharosNotificationInput {
@@ -51,6 +53,27 @@ public static class PharosNotificationActivation {
  private static readonly ManualResetEventSlim ListenerStop=new ManualResetEventSlim(false);
  private static Thread listener;
  private static int listenerResult=-1;
+ private static int desktopPid;
+ private static long desktopStarted;
+ public static int DesktopProcessId { get { return desktopPid; } }
+ [DllImport("user32.dll",SetLastError=true)] [return:MarshalAs(UnmanagedType.Bool)]
+ private static extern bool AllowSetForegroundWindow(uint processId);
+ // This PID arrives only from the host's inherited parent over the private stdin pipe.
+ public static bool ConfigureDesktopProcess(int pid) {
+  desktopPid=0;desktopStarted=0;
+  try { using(var process=Process.GetProcessById(pid)) {
+   if(process.SessionId!=Process.GetCurrentProcess().SessionId ||
+      !String.Equals(process.ProcessName,"DeepSeek Harness",StringComparison.OrdinalIgnoreCase))return false;
+   desktopStarted=process.StartTime.ToUniversalTime().Ticks;desktopPid=pid;return true;
+  }} catch { return false; }
+ }
+ private static bool GrantForeground() {
+  if(desktopPid<=0)return false;
+  try { using(var process=Process.GetProcessById(desktopPid)) {
+   if(process.StartTime.ToUniversalTime().Ticks!=desktopStarted)return false;
+   return AllowSetForegroundWindow((uint)desktopPid);
+  }} catch { return false; }
+ }
  [DllImport("ole32.dll")] private static extern int CoInitializeEx(IntPtr reserved,uint mode);
  [DllImport("ole32.dll")] private static extern void CoUninitialize();
  [DllImport("ole32.dll")] private static extern int CoRegisterClassObject(ref Guid clsid,[MarshalAs(UnmanagedType.IUnknown)] object factory,uint context,uint flags,out uint cookie);
@@ -84,16 +107,34 @@ public static class PharosNotificationActivation {
   ticket=match.Groups[2].Value;return true;
  }
  public static bool Deliver(string arguments) {
+  return Deliver(arguments,GrantForeground);
+ }
+ // The prepare request validates a live ticket/current preferences without consuming it.
+ // Grant on every click: Windows invalidates the previous grant after other user input.
+ public static bool Deliver(string arguments,Func<bool> grant) {
   int port;string ticket;if(!Parse(arguments,out port,out ticket))return false;
+  var prepared=Request(port,"{\"ticket\":\""+ticket+"\",\"phase\":\"prepare\"}");
+  if(prepared!="{\"autoFocus\":true}" && prepared!="{\"autoFocus\":false}")return false;
+  bool granted=false;
+  if(prepared=="{\"autoFocus\":true}") { try { granted=grant(); } catch {} }
+  return Request(port,"{\"ticket\":\""+ticket+"\",\"foregroundGranted\":"+(granted?"true":"false")+"}")=="{\"activated\":true}";
+ }
+ private static string Request(int port,string json) {
   try {
    var request=(HttpWebRequest)WebRequest.Create("http://127.0.0.1:"+port+"/pharos/api/native-activation");
    request.Proxy=null;request.AllowAutoRedirect=false;request.Timeout=5000;request.ReadWriteTimeout=5000;
    request.Method="POST";request.ContentType="application/json";request.Headers["x-pharos-desktop"]="1";
    request.ServicePoint.Expect100Continue=false;
-   var body=Encoding.UTF8.GetBytes("{\"ticket\":\""+ticket+"\"}");request.ContentLength=body.Length;
+   var body=Encoding.UTF8.GetBytes(json);request.ContentLength=body.Length;
    using(var stream=request.GetRequestStream())stream.Write(body,0,body.Length);
-   using(var response=(HttpWebResponse)request.GetResponse())return response.StatusCode==HttpStatusCode.OK;
-  } catch { return false; }
+   using(var response=(HttpWebResponse)request.GetResponse()) {
+    if(response.StatusCode!=HttpStatusCode.OK)return null;
+    using(var reader=new StreamReader(response.GetResponseStream(),Encoding.UTF8)) {
+     var chars=new char[1025];var count=reader.ReadBlock(chars,0,chars.Length);
+     return count>1024?null:new string(chars,0,count);
+    }
+   }
+  } catch { return null; }
  }
  public static bool ValidServerArgs(string[] args) {
   return args!=null&&args.Length>=1&&args.Length<=2&&args[0]=="-ToastActivated"&&

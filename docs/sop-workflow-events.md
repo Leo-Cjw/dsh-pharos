@@ -45,7 +45,7 @@
 
 - **v0.6.3 起所有通知类型都尝试打开对应会话**，工作流也走同一点击链路；自动聚焦关闭时仍尝试导航，但不主动把窗口带到前台。
   `agent-start` / `agent-end` 帧有真实 `childId`，可打开仍在会话列表中的子会话；`phase` / `log` 只有工作流运行 ID，不能当成会话 ID，会被导航校验拦下（log 本身也不弹通知）。加载中、归档或已不在列表中的子会话同样不跳。
-  当前 Windows COM 候选已通过三条通知同时保留、C→A→B 乱序点击的主/子会话映射验收。首次点击从 Sourcetree 自动恢复 DSH；后两次只闪烁任务栏，会话仍正确切换，连续点击的前台恢复尚未通过。此次使用 remote 入口及已有子会话，未重新运行工作流上游事件；详情见 [Windows 验收记录](issue-1-windows-notifications.md)。
+  当前 Windows COM 候选已通过三条通知同时保留、C→A→B 乱序点击的主/子会话映射验收。补齐每次点击的前台权限交接后，第十九轮三次均从 Sourcetree 自动恢复 DSH 并进入各自目标。此次使用 remote 入口及已有子会话，未重新运行工作流上游事件；详情见 [Windows 验收记录](issue-1-windows-notifications.md)。
 - ⚠️ 工作流**帧本身****不受**「跳过子代理事件」影响 —— 它的 `agentType` 恒为 `root`
   （刻意取舍，否则默认 `skipSubagents=true` 会把整组提醒吞掉）。
   但**子代理会话自己**的「任务已完成」通知会被该开关正确过滤 —— host 判出子代理后下发 sessionId
@@ -67,7 +67,7 @@
 
 全部 workflow 帧仍进入 SSE/调试队列，Webhook 按原有策略逐事件发送；此规则不节流上游事件、不改变子会话 ID。完成、需要你操作、出错等普通通知也走原生通道，但不受工作流三条容量规则限制。macOS 和普通浏览器不启用此原生通道或容量规则。旧版本或旧客户端留下的历史不会自动接管；已淘汰的票据不再提供旧会话入口。退出/重启后不支持冷启动恢复旧会话。
 
-诊断主通道看 `__dshPharos.debug().desktopNativeNotifications`、`nativeNotifications` 中的 key/kind/sessionId/id、`recentNotifications[].nativeId`；host 的 `GET /pharos/api/native-notifications`（请求头 `x-pharos-desktop:1`）返回助手 PID、pending/entries 与最近 20 条事件。原生 ID 或显示请求成功不证明横幅可见；`com-activated`、SSE 目标及实际落地会话用于核验点击。`focusHandled=true` 仅表示固定窗口恢复请求已发起，不能单独证明前台恢复。
+诊断主通道看 `__dshPharos.debug().desktopNativeNotifications`、`nativeNotifications` 中的 key/kind/sessionId/id、`recentNotifications[].nativeId`；host 的 `GET /pharos/api/native-notifications`（请求头 `x-pharos-desktop:1`）返回助手 PID、pending/entries 与最近 20 条事件。`desktop-identity` 是绑定的 DSH 主进程，`com-activated.foregroundGranted` 是当次前台授权结果。原生 ID 或显示请求成功不证明横幅可见；`com-activated`、SSE 目标及实际落地会话用于核验点击。`focusHandled=true` 仅表示固定窗口恢复请求已发起，`foregroundGranted=true` 也不单独证明实际前台恢复，仍需核验用户看到的结果。
 
 没有新 host 时兼容旧 Web 路径：工作流使用 `pharos-wf-<实例时间>-<随机段>-<序号>` 唯一短 tag，`workflowNotificationSlots` / `recentNotifications.workflowTag` / `workflowHistoryCleanup` 只诊断这条旧路径。旧对象 close 可能只隐藏横幅，历史清理由本机 API 串行批量执行、失败最多重试三次；缺少 host 或清理失败时不能保证容量。固定 tag 替换候选已撤回，旧 Web 历史点击仍可能受宿主关闭事件影响，不沿用为当前 COM 方案的验收结果。
 
@@ -161,4 +161,4 @@
 3. **同名阶段 3 秒内去重**（见 §1.4）。
 4. **音效复用默认音型**，无专属 workflow 音型。
 5. **实时提醒依赖页面打开** —— 与其它提醒类型一致：DSH 页面需保持打开（最小化/切后台可以）。
-6. **Windows 验收分开记**：早期候选实测 9 个工作流事件保留 3 条历史，不能算当前 COM 候选重新通过全链路工作流验收。当前 COM 候选已通过三条 remote 通知同存、乱序导航到不同主/子会话；首次自动恢复前台通过，后两次只闪烁任务栏，连续前台恢复失败。macOS 未实机重测，详见 [Windows 验收记录](issue-1-windows-notifications.md)。
+6. **Windows 验收分开记**：早期候选实测 9 个工作流事件保留 3 条历史，不能算当前 COM 候选重新通过全链路工作流验收。当前 COM 候选第十九轮已通过三条 remote 通知同存、C→A→B 乱序导航到不同主/子会话，且每次都从 Sourcetree 自动恢复前台。macOS 未实机重测，详见 [Windows 验收记录](issue-1-windows-notifications.md)。
