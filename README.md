@@ -74,7 +74,7 @@ v0.4 起：host 半在线时以服务端配置为准（`/pharos/api/config`，�
 
 Windows「只有声音」的定位、修复和实机验收见 [issue #1 修复记录](docs/issue-1-windows-notifications.md)。系统通知不传会话 ID tag；事件去重仍由 SSE 去重和完成节流完成。
 
-Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。启用自动聚焦时通过 DSH 既有的固定 `dsh://open` 恢复窗口。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时只在后台切换会话。
+Windows Electron 在本机 host 支持时使用隐藏的系统 Windows PowerShell 原生助手发送通知，以独立应用身份 `DSH Pharos Notifications` 显示。助手保持 COM 激活监听，通知携带一次性随机票据；点击经本机 host/SSE 返回原始会话 ID、调用 `uiWorkspace.openSession`。启用自动聚焦时通过 DSH 既有的固定 `dsh://open` 请求恢复窗口。通知 tag 和 launch 参数不包含会话 ID；关闭自动聚焦时只在后台切换会话。当前 Unreleased 候选三条通知乱序导航已通过；首次从 Sourcetree 自动恢复前台，后两次仅闪烁任务栏，连续点击的前台恢复仍未修复，PR 尚不能按完整窗口恢复验收收口。
 
 首次发送会在当前用户注册 Pharos 自有的 AUMID 和 COM CLSID，生成的激活程序缓存于 `%LOCALAPPDATA%\dsh-pharos\notifications`。写入仅限两个带所有者标记的私有注册表键，发现其他所有者时停止原生发送；不重建共享注册表键、不修改默认协议关联。另在当前用户开始菜单创建独立的 `DSH Pharos Notifications.lnk`，设置应用 ID 与激活 CLSID 并读回核验，保留 DSH 原快捷方式；同名快捷方式属于其他应用时拒绝覆盖。注册、快捷方式和缓存会留在本机，退出时释放 COM 监听并清理本轮通知入口；卸载插件不会自动删除这些私有注册及缓存。此通道要求 DSH host 正在运行，不支持退出后冷启动恢复旧会话。曾测试的 `dsh-pharos://` 协议候选因 Windows 报“没有可打开此链接的应用”已撤回。当前 COM 候选已验证关闭自动聚焦时后台跨会话导航，以及三条通知同时保留、乱序点击分别进入对应主/子会话；此结果不代表所有 Windows 版本或免打扰模式下横幅都可见。
 

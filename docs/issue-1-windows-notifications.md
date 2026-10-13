@@ -4,6 +4,22 @@
 
 当前候选（2026-10-13）使用独立 AUMID `LeoCjw.DshPharos`、专用开始菜单快捷方式和运行中 COM 激活监听，并保留 host 窗口恢复与 SSE 重连补交。第十八轮三条通知同时保留，C→A→B 乱序点击均对应指定主/子会话，用户反馈与原生 ID、SSE 目标一致；最终配置已核对，完整测试通过 M1 349 项、host 353 项及 Windows 原生助手/安装测试。历史协议方案已撤回，其通过结果不沿用为当前方案通过。横幅可见性、窗口恢复请求和目标会话跳转分别记录，不用 API 请求成功冒充瞬时前台观测；本机注册表实验的完整恢复仍无法确认。
 
+**当前结论：PR 尚不能收口。** 用户补确认首次 C 点击从 Sourcetree 自动恢复 DSH 并显示子会话；第二、第三次 A/B 点击仅闪烁任务栏，窗口没有直接弹出，会话仍正确切换。这已经是连续前台恢复失败，不再记为“缺少确认”。以下旧轮次的“待验收”保留当时上下文，当前状态以此表及第十八轮补充为准。
+
+| 验收项 | 当前状态 | 依据与边界 |
+| --- | --- | --- |
+| 通知显示 | 本机已观察到独立通知，有限通过 | 用户截图/实际点击；不推广为所有系统模式或版本的横幅通过 |
+| 三条通知信息与目标映射 | 通过 | C→A→B 原生 ID、SSE 目标及用户落地会话一致，无串信息 |
+| 自动聚焦关闭时后台导航 | 通过 | 第十四轮 B，恢复窗口前核验跨会话结果 |
+| 首次自动恢复前台 | 通过 | 第十八轮 C，用户明确补确认自动恢复 |
+| 连续点击前台恢复 | **失败，阻塞收口** | 第十八轮 A/B 仅闪烁任务栏；会话切换成功不能替代前台恢复 |
+| 本地完整测试 | 通过 | 原 v0.3、M1 349、host 353 与 Windows 原生/隔离安装测试 |
+| GitHub CI | 没有返回检查结果 | 不能记为 CI 通过 |
+| 新工作流上游全链路 / macOS 重测 | 未重测 | 当前多通知验收用 remote 和已有子会话 |
+| 旧协议实验环境事故恢复 | 无法确认完整恢复 | 原共享注册项缺少完整备份；已恢复有来源可核实的 WorkBuddy 项 |
+
+实现、配置及运维边界同步于 [README](../README.md)、[工作流 SOP](sop-workflow-events.md)、[架构扩展](functional-architecture.md)、[契约 §11](contract-m1.md) 和 [截图维护清单](screenshot-guide.md)。新版本未发布，不以旧截图或旧协议方案代替当前候选验收。
+
 ## 结论与依据
 
 旧实现把完整会话 ID 写入 Web Notification `tag`：
@@ -298,7 +314,11 @@ B 点击后诊断中也有 `focus-requested, status=200`；该字段只记录 HT
 | A | `pharos-native-78b251d2083311d10e06e882` | `session-dec7e142-8c50-4818-9e4a-be1eed4fa6dc` | 第二次，进入“这是 Pharos issue #1 的通知验收” |
 | B | `pharos-native-d97f561708625502cf00f184` | `session-52766c78-2c8b-4911-9f78-d20217e418ad` | 第三次，用户称 start；进程窗口标题只读核实为 strat |
 
-三条分别收到上述 ID 的 com-activated/remove ack，独立 SSE 对应 key 后缀 7/5/6、原始目标与次序 C/A/B，均为 autoFocus=true、focusHandled=true。用户确认三个实际目标；助手在结果核验前没有手动恢复或切会话。通知映射交叉验收通过、最终 entries=0。此次没有重新创建工作流 agent；验证的是三条系统通知同存与已有主/子会话导航，不冒充新一轮工作流上游事件验收。首次点击是否自动恢复前台未获得单独明确答复，仍不将 focusHandled 当成完整前台测量。
+三条分别收到上述 ID 的 com-activated/remove ack，独立 SSE 对应 key 后缀 7/5/6、原始目标与次序 C/A/B，均为 autoFocus=true、focusHandled=true。用户确认三个实际目标；助手在结果核验前没有手动恢复或切会话。通知映射交叉验收通过、最终 entries=0。此次没有重新创建工作流 agent；验证的是三条系统通知同存与已有主/子会话导航，不冒充新一轮工作流上游事件验收。
+
+**前台恢复补确认（2026-10-13）**：用户答复“是的，自动恢复。但是第二次和第三次，他就是 windows 菜单栏会有闪烁，没有直接弹窗，但是会话会切换。”据此，首次 C 自动恢复通过；后续 A/B 仅闪烁任务栏，连续前台恢复失败。三条都 focusHandled=true，与实际前台行为不同，再次证明该字段只能表示恢复请求发起，不能当成验收成功。
+
+源码当前在 host 中启动 explorer 打开固定 dsh://open，再推送 SSE；COM 回调只投递本机 HTTP，未显式向接收窗口的进程移交前台权限。[Windows SetForegroundWindow 说明](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)明确前台激活受到限制，失败可能只闪烁任务栏；[AllowSetForegroundWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-allowsetforegroundwindow)允许有权限的进程向指定进程授权。[Firefox 原生通知实现说明](https://firefox-source-docs.mozilla.org/widget/windows/notification-server/index.html)也在 COM 回调期间向实际浏览器进程移交权限。以上支持继续核验 COM→host→DSH 的权限交接，但尚未测得本机每次权限状态，不能写成已确认根因或已修复。后续必须逐次核验前台结果，不能只看导航或恢复请求成功。
 
 新增回归分别在真实 broker 和浏览器客户端测试三条不同目标并发发送、C/A/B 乱序消费、错目标帧不得消费入口、重复点击只导航一次，消费后归零。设置同步反向实验去掉同步时恰好两项行为断言失败，原始源码已按字节恢复。最终完整 npm test：原 v0.3、M1 349 项、host 353 项及 Windows 原生助手/隔离安装测试全部通过；打包包含 31 个文件、激活源码完整、不预置 exe。最新 origin/main 仍为 e230be1，已在开发分支内。
 

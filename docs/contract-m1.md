@@ -2,6 +2,7 @@
 
 > 本文件是 M1（host 桥）团队共享的**单一事实源**：帧契约、路由契约、配置 Schema、文件职责、行为规则、运行时事实。任何成员实现前先读完本文档与 docs/functional-architecture.md §3-§4。冲突以本文档为准。
 > 总设计见 docs/functional-architecture.md；四仓库实现细节见 docs/research/。
+> 上述优先级限 M1 原契约；后续修订见 §10，当前 Unreleased Windows 扩展见 §11。旧 M1 范围排除项不否定已实现的 Windows 通道，历史默认值不代表当前完整配置 Schema。
 
 ## 0. 这一版做/不做
 
@@ -213,3 +214,56 @@ order 实测占用：general `0` / models `10` / plugins `15` / agent-presets `2
 **版本**：0.5.0 → **0.5.1**。用户可见行为变更（设置入口从「内置插件」分区内标签页升为顶级分区 + 新增灯塔图标），无新功能，故走 patch 位；`0.6.0` 留给 M2.5（`docs/m2.5-plan.md`）。`package.json` 的 description 同步改为「…a settings page in the Settings sidebar.」（原为 "a settings tab"，与新位置不符）。
 
 **历史待办（已更新）**：旧位置与通用插画截图已被后续截图替换；当前文件名、平台与剩余 Windows 通知横幅拍摄项见 [截图维护清单](screenshot-guide.md)。不要再按本段旧文件名重拍，也不要为拍图自动修改系统专注模式。
+
+## 11. Windows 原生通知扩展（Unreleased / PR #2）
+
+本节补充当前实现，未发布新版本；M1 原有事件策略和 Webhook 契约继续适用。Windows Electron + 支持该能力的 host 选择原生 Toast/COM 通道，macOS/普通浏览器及缺少新 host 的客户端保留原路径。`hostNotify` 仍是未实现的 osascript 兼容配置位，不是 Windows 原生通道开关。
+
+### 11.1 模块与资源
+
+- `lib/host/windows-notifications.js`：每 host 一个惰性助手；原生 ID、一次性票据和原始会话映射、工作流容量、释放及诊断。
+- `lib/host/windows-notifications.ps1`：固定随包脚本，通过 stdin JSON 接收标题/正文；持有 Toast，按自有应用/组/tag 删除历史并读回。
+- `lib/host/notification-activation.cs`：运行中 MTA COM 类工厂、回调和快捷方式属性访问；固定格式本机 HTTP 投递。
+- `lib/host/notification-activation.js` / `.ps1`：安装自有 AUMID/CLSID 和独立快捷方式，从校验过的随包源码编译缓存激活程序；发现其他所有者拒绝覆盖。
+- `lib/host/desktop.js`：只启动系统 explorer 打开固定 `dsh://open`，不消费请求中的 URL 或命令。
+
+私有资源包括当前用户的 `Software\Classes\AppUserModelId\LeoCjw.DshPharos`、`Software\Classes\CLSID\{1D9DF316-599A-4CAB-8FF9-F0F012928FCA}`、开始菜单 `DSH Pharos Notifications.lnk` 及 `%LOCALAPPDATA%\dsh-pharos\notifications` 缓存。当前安装脚本使用 CreateSubKey 保留现有值，不访问共享 RegisteredApplications，不修改原 DSH 快捷方式、不注册新 URI 协议。退出释放监听与本轮入口；卸载不自动删除私有注册、快捷方式或缓存，不支持退出后冷启动恢复旧会话。
+
+### 11.2 同源路由扩展
+
+下列接口仍挂载既有 `/pharos/api`。全部校验 loopback remoteAddress、Host/端口；必须带 `x-pharos-desktop:1`，存在 Origin 时仅接受 `dsh-app://app` 或请求 Host 的 HTTP origin。带 JSON body 的接口要求 application/json、沿用 16 KiB 请求体上限；跨站来源拒绝 403。
+
+| 路由 | 方法 | 载荷 / 行为 |
+| --- | --- | --- |
+| `/desktop-focus` | POST | 不接收命令/URL；enabled 或 autoFocus 关闭返回 requested=false，否则请求固定 DSH 恢复入口；requested=true 仅代表子进程启动请求成功 |
+| `/native-notifications` | GET | 助手 PID、pending/entries 和最近 20 条原生事件；不返回票据或正文 |
+| `/native-notifications` | POST | `{clientId,key,kind,sessionId,title,body,autoFocus}`；enabled/toast 关闭返回 requested=false；成功返回 requested=true 和随机原生 id |
+| `/native-notifications` | DELETE | `{clientId}`；释放该客户端入口及其激活重放缓存 |
+| `/native-activation` | POST | `{ticket}`；48 位小写十六进制；消费一次返回 activated=true，未知/过期/重复票据 410，格式非法 400 |
+| `/workflow-history` | POST | `{tags}`；仅接受旧 Web 工作流短标识，精确删除兼容路径的历史，不清空其他应用或整个通知中心 |
+
+原生发送字段限制：clientId 匹配 `^pharos-wf-[a-z0-9]+-[a-z0-9]+$`，最长 48；key 以 clientId 加连字符开头，仅小写字母/数字/连字符，最长 60；kind 为 done/attention/error/interrupted/limit/job/remote/test/workflow；sessionId 非空且最长 512；title 非空且最长 256；body 字符串最长 8192；autoFocus 为布尔值。原生 tag 是 `pharos-native-` 加 24 位十六进制，launch 只含本机端口/48 位票据；会话 ID 不进入 tag 或 launch。GET config 的 `desktopNativeNotifications` 是能力元数据，客户端不作为偏好保存；当前设置保存成功后同步同窗口运行时配置。
+
+### 11.3 激活帧与生命周期
+
+原生激活帧仍使用 SSE 事件名 pharos，但不属于 §2 的提醒 PharosEvent，也不进入提醒总线或 Webhook：
+
+```ts
+interface NativeNotificationFrame {
+  kind: 'native-notification';
+  action: 'activated' | 'failed' | 'closed';
+  clientId: string; key: string; sessionId: string;
+  autoFocus: boolean;
+  focusHandled: boolean; // 固定恢复请求已发起，不是前台恢复测量
+}
+```
+
+host 最多缓存 128 条 activated 帧用于 SSE 重连补交；客户端只接受自身 clientId、匹配 key 与原始 sessionId 的入口，消费一次后删除。错误目标不能消费正确入口；重复帧不再次导航。退出/卸载释放所属入口。激活在 enabled 关闭时不派发；autoFocus 同时要求发送时开关和当前 host 开关，客户端也检查当前开关。关闭自动聚焦仍可后台导航。
+
+TimedOut 保留票据与监听，UserCanceled/failed/activated 释放对应入口。工作流跨工作流名称共享每客户端最近 3 条；发送第四条前先精确淘汰并读回，失败停止新发送。普通通知不受这项三条规则限制；助手总容量 512、命令超时 15 秒。助手错误补一次 DOM 提示，不重发 Web 通知或提示音。旧 Web 路径的 workflowNotificationSlots/workflowHistoryCleanup 不能替代原生通道诊断。
+
+### 11.4 当前验收边界
+
+完整本地测试通过原 v0.3、M1 349 项、host 353 项及 Windows broker/回调解析/助手/隔离安装测试。实际三条通知 C→A→B 分别导航到指定子会话、主会话和 strat，未串信息；首次从 Sourcetree 自动恢复前台通过，后两次只闪烁任务栏，连续前台恢复失败。自动化的恢复请求成功不能覆盖这一实机失败，PR 尚不能按完整窗口恢复验收收口。此次未重新运行工作流上游事件、未实机重测 macOS。
+
+旧协议实验的共享注册项完整恢复仍无法确认，当前私有安装隔离测试不等同于事故恢复。逐轮证据及当前结论见 [Windows 验收记录](issue-1-windows-notifications.md)，操作说明见 [工作流 SOP](sop-workflow-events.md)。
