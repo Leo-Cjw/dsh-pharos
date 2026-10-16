@@ -618,8 +618,10 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   assert(applyPutBody({ apiToken: 'abc' }, { apiToken: 'new' }).apiToken === 'new', '#9 字符串新值正常生效');
   assert(applyPutBody({ apiToken: 'abc' }, { apiToken: '' }).apiToken === '', '#9 显式清空仍生效');
   const n1 = normalizeConfig({ apiToken: 123, webhooks: 'nope' });
-  assert(n1.apiToken === '' && Array.isArray(n1.webhooks) && n1.webhooks.length === 0,
-    '#9/#13 加载时归一：apiToken 非字符串 → 空串，webhooks 非数组 → []');
+  // apiToken 非字符串**刻意保留**（不洗成空串）：洗掉会把「已配置」降级为「无需鉴权」，
+  // 由 routes 的守卫 fail closed（评审 D3）。webhooks 仍需归一为数组。
+  assert(n1.apiToken === 123 && Array.isArray(n1.webhooks) && n1.webhooks.length === 0,
+    '#9/#13 加载时归一：apiToken 非字符串**原样保留**（交给守卫 fail closed），webhooks 非数组 → []');
   const srcObj = { apiToken: 123, webhooks: 'nope' };
   normalizeConfig(srcObj);
   assert(srcObj.apiToken === 123 && srcObj.webhooks === 'nope', '#9 normalizeConfig 不改动入参');
@@ -660,38 +662,101 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   assert(Array.isArray(normalized.webhooks) && normalized.webhooks.length === 0,
     '#13 畸形配置加载后 webhooks 恒为数组（消除重启后静默失效）');
 
-  // 有 id 时**绝不**退回下标：即便 id 对不上，也不能拿同下标行的密钥
+  // 有 id 时**绝不**退回下标：即便 id 对不上，也不能拿同下标行的密钥。
+  // 同时**不静默删除**：保留掩码原样，避免密钥无声消失（评审 D2）。
   const mismatched = applyPutBody({ webhooks: [rowA, rowB] }, { webhooks: [{ id: 'brand-new', name: 'N', secret: SECRET_MASK }] });
-  assert(mismatched.webhooks[0].secret === undefined,
-    '#10 id 对不上时不回退下标（否则会拿到 A 的密钥）');
+  assert(mismatched.webhooks[0].secret !== 'SECRET_A' && mismatched.webhooks[0].secret !== 'SECRET_B',
+    '#10 id 对不上时不回退下标（不会拿到 A/B 的密钥）');
+  assert(mismatched.webhooks[0].secret === SECRET_MASK,
+    '#10 id 对不上时不静默删除 secret 键（保留掩码，评审 D2）');
+
+  // --- 评审 D4 / D5：重复 id 与数组内非对象元素 ---
+  const dupIds = normalizeConfig({ webhooks: [{ id: 'dup', name: 'X', secret: 'SECRET_A' }, { id: 'dup', name: 'Y', secret: 'SECRET_A' }] });
+  assert(dupIds.webhooks.length === 1, '#D4 重复 id 只保留首个（避免两行共享密钥 / _key 碰撞「删一行删两行」）');
+  const junkRows = normalizeConfig({ webhooks: ['junk', null, 42, { id: 'ok', name: 'ok' }] });
+  assert(junkRows.webhooks.length === 1 && junkRows.webhooks[0].id === 'ok',
+    '#D5 数组内非对象元素被丢弃（契约「webhooks 恒为对象数组」成立）');
+  const junkPut = applyPutBody({ webhooks: [] }, { webhooks: ['x', null, 7, { name: 'ok' }] });
+  assert(junkPut.webhooks.length === 1 && junkPut.webhooks[0].name === 'ok',
+    '#D5 PUT 落盘同样丢弃非对象行（不把垃圾写进配置）');
 
   const two = applyPutBody({ webhooks: [] }, { webhooks: [{ name: '1' }, { name: '2' }] });
   const [i1, i2] = two.webhooks.map((w) => w.id);
   assert(typeof i1 === 'string' && i1.length >= 8 && i1 !== i2, '#10 每行分到唯一稳定 id');
 }
 
-// ---- 11c. issue #9：磁盘上的非字符串 apiToken 不得让 trigger 免鉴权 ----
+// ---- 11c. issue #9 / D3：磁盘上的非字符串 apiToken 必须 fail closed ----
+// ⚠️ 早期版本在这里先 setup() 再改文件，而 setup() 会 rmSync 配置 ——
+//    于是「磁盘是畸形值」这个场景从未被跑到（PR #34 评审 D5）。
+//    现在用 setup({ config }) 在 apply() **之前**预置，且不再触碰磁盘。
 {
-  const { ctx, disposer } = setup();
-  const cfgFile = path.join(profileDir, 'pharos.json');
-  await putConfig(ctx, { apiToken: 'guarded' });
-  const raw = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
-  raw.apiToken = 123;
-  fs.writeFileSync(cfgFile, JSON.stringify(raw), 'utf8');
+  const { ctx, disposer } = setup({ config: { apiToken: 123, enabled: true } });
+  const cfgFile = path.join(profileDir, "pharos.json");
+  // 前置条件自检：磁盘上确实是畸形值（证明场景真的成立）
+  const onDisk = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+  assert(onDisk.apiToken === 123, "#9 前置条件：磁盘 apiToken 确为非字符串 123");
+  // 不修磁盘，直接打 trigger —— 畸形配置必须拒绝，而不是当成「没设 token」
+  const anon = await trigger(ctx, {});
+  assert(anon.res.state.status === 401, "#9 磁盘畸形 token → 无凭证 trigger 401（fail closed，不降级为免鉴权）");
+  const anyToken = await trigger(ctx, { extraHeaders: { "x-pharos-token": "anything" } });
+  assert(anyToken.res.state.status === 401, "#9 畸形 token 下带任意 token 也 401（不匹配即拒）");
   disposer();
-
-  const { ctx: ctx2, disposer: disposer2 } = setup();
-  const proper = await putConfig(ctx2, { apiToken: 'guarded' });
-  assert(proper.res.state.status === 200, '#9 畸形值被归一后重新设置字符串 token → 200');
-  const withToken = await trigger(ctx2, { extraHeaders: { 'x-pharos-token': 'guarded' } });
-  assert(withToken.res.state.status === 200, '#9 带正确 token → 200');
-  const withoutToken = await trigger(ctx2, {});
-  assert(withoutToken.res.state.status === 401, '#9 设了 token 后不带 token → 401（校验未被跳过）');
-  const wrongToken = await trigger(ctx2, { extraHeaders: { 'x-pharos-token': 'nope' } });
-  assert(wrongToken.res.state.status === 401, '#9 错误 token → 401');
-  disposer2();
+}
+{
+  // 正常路径不受影响：空 token = 免校验；字符串 token = 强校验
+  const { ctx: c1, disposer: d1 } = setup({ config: { apiToken: "", enabled: true } });
+  assert((await trigger(c1, {})).res.state.status === 200, "#9 空 token 配置 → trigger 200（默认免校验语义不变）");
+  d1();
+  const { ctx: c2, disposer: d2 } = setup({ config: { apiToken: "guarded", enabled: true } });
+  assert((await trigger(c2, {})).res.state.status === 401, "#9 设了 token 不带 → 401");
+  assert((await trigger(c2, { extraHeaders: { "x-pharos-token": "guarded" } })).res.state.status === 200, "#9 正确 token → 200");
+  assert((await trigger(c2, { extraHeaders: { "x-pharos-token": "nope" } })).res.state.status === 401, "#9 错误 token → 401");
+  d2();
 }
 
+// ---- 11d. issue #10 端到端：真实 mergeConfig → PUT body 必须带 id ----
+// 11b 全部用手写 id 直测 applyPutBody，正好绕过了「客户端把 id 抹掉」这条真实路径 ——
+// 那正是 D1 漏网的原因。这里用真实 settings-view.js 的 mergeConfig 复现整条链路。
+{
+  const vm = await import("node:vm");
+  const viewSrc = fs.readFileSync(new URL("../lib/settings-view.js", import.meta.url), "utf8");
+  const sandbox = { console, setTimeout, clearTimeout, Date, Math, JSON, Object, Array, String, Number, Boolean, RegExp, Error, Promise, Map, Set, Symbol };
+  sandbox.window = sandbox; sandbox.globalThis = sandbox; sandbox.globalScope = sandbox;
+  sandbox.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+  sandbox.document = { getElementById: () => null, querySelectorAll: () => [], documentElement: { lang: "zh" } };
+  const vctx = vm.createContext(sandbox);
+  vm.runInContext(viewSrc.replace("// [settings-view:tail]",
+    "globalScope.__t={mergeConfig:mergeConfig,draftRows:draftRows,webhooksPayload:webhooksPayload};\n// [settings-view:tail]"), vctx);
+  const T = sandbox.__t;
+  assert(T && typeof T.mergeConfig === "function", "#10 真实 mergeConfig/draftRows/webhooksPayload 已载入（vm）");
+
+  const { ctx, disposer } = setup();
+  await putConfig(ctx, { webhooks: [
+    { name: "A", channel: "wecom", url: "https://a.invalid/h", secret: "SECRET_A", events: [], enabled: true },
+    { name: "B", channel: "feishu", url: "https://b.invalid/h", secret: "SECRET_B", events: [], enabled: true },
+    { name: "C", channel: "dingtalk", url: "https://c.invalid/h", secret: "SECRET_C", events: [], enabled: true },
+  ] });
+  const cfgFile = path.join(profileDir, "pharos.json");
+  const diskSecrets = () => JSON.parse(fs.readFileSync(cfgFile, "utf8")).webhooks.map((w) => w.name + "=" + w.secret);
+  assert(diskSecrets().join(",") === "A=SECRET_A,B=SECRET_B,C=SECRET_C", "#10 前置条件：三行各有独立密钥");
+
+  // 设置页真实链路：GET 打码 → draftRows → 删中间行 → webhooksPayload → mergeConfig
+  const masked = JSON.parse((await getConfig(ctx)).res.body).webhooks;
+  const rows = T.draftRows(masked);
+  assert(rows.every((r) => typeof r.id === "string" && r.id), "#10 draftRows 为每行保留 id");
+  const payload = T.mergeConfig({}, { webhooks: T.webhooksPayload(rows.filter((r) => r.name !== "B")) });
+  assert(payload.webhooks.every((w) => typeof w.id === "string" && w.id),
+    "#10 mergeConfig 透传 id（D1 回归点：漏了这句则 PUT body 永不含 id）");
+  assert(JSON.stringify(payload.webhooks).includes(String.fromCharCode(34) + "id" + String.fromCharCode(34)),
+    "#10 PUT body 实际含 id 字段");
+
+  await putConfig(ctx, { webhooks: payload.webhooks });
+  const after = diskSecrets();
+  assert(after.includes("A=SECRET_A"), "#10 删中间行后 A 保住自己的密钥");
+  assert(after.includes("C=SECRET_C"), "#10 删中间行后 C 保住自己的密钥（修复前会拿到 B 的）");
+  assert(!after.some((s) => s.includes("***")), "#10 落盘不含字面量掩码");
+  disposer();
+}
 // ---- 12. store 路径解析单元 ----
 if (store) {
   {
