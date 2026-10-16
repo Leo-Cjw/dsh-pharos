@@ -663,12 +663,13 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
     '#13 畸形配置加载后 webhooks 恒为数组（消除重启后静默失效）');
 
   // 有 id 时**绝不**退回下标：即便 id 对不上，也不能拿同下标行的密钥。
-  // 同时**不静默删除**：保留掩码原样，避免密钥无声消失（评审 D2）。
+  // 且**绝不**把掩码原样落盘（否则 "***" 冒充真密钥，设置页显示「已设置」却签名失败
+  // —— PR #34 复审 R2）。匹配不到 = 没有可回填的原值 → 丢弃该字段。
   const mismatched = applyPutBody({ webhooks: [rowA, rowB] }, { webhooks: [{ id: 'brand-new', name: 'N', secret: SECRET_MASK }] });
   assert(mismatched.webhooks[0].secret !== 'SECRET_A' && mismatched.webhooks[0].secret !== 'SECRET_B',
     '#10 id 对不上时不回退下标（不会拿到 A/B 的密钥）');
-  assert(mismatched.webhooks[0].secret === SECRET_MASK,
-    '#10 id 对不上时不静默删除 secret 键（保留掩码，评审 D2）');
+  assert(mismatched.webhooks[0].secret === undefined && mismatched.webhooks[0].id === 'brand-new',
+    '#R2 id 对不上时丢弃掩码（不把字面量 *** 当真密钥落盘，行本身保留）');
 
   // --- 评审 D4 / D5：重复 id 与数组内非对象元素 ---
   const dupIds = normalizeConfig({ webhooks: [{ id: 'dup', name: 'X', secret: 'SECRET_A' }, { id: 'dup', name: 'Y', secret: 'SECRET_A' }] });
@@ -683,6 +684,34 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   const two = applyPutBody({ webhooks: [] }, { webhooks: [{ name: '1' }, { name: '2' }] });
   const [i1, i2] = two.webhooks.map((w) => w.id);
   assert(typeof i1 === 'string' && i1.length >= 8 && i1 !== i2, '#10 每行分到唯一稳定 id');
+
+  // --- 复审 R1：去重必须在 **PUT 路径** 也生效（不只加载路径） ---
+  const putDup = applyPutBody({ webhooks: [] }, { webhooks: [
+    { id: 'dup', name: 'X', secret: 'SX' }, { id: 'dup', name: 'Y', secret: 'SX' },
+  ] });
+  assert(putDup.webhooks.length === 1 && putDup.webhooks[0].name === 'X',
+    '#R1 PUT 两行同 id → 只保留首个（否则两行共享密钥 + 客户端 _key 碰撞「删一行删两行」）');
+  const putDupMask = applyPutBody({ webhooks: [{ id: 'o', name: 'O', secret: 'S_O' }] }, { webhooks: [
+    { id: 'ghost', name: 'P', secret: SECRET_MASK }, { id: 'ghost', name: 'Q', secret: SECRET_MASK },
+  ] });
+  assert(putDupMask.webhooks.length === 1, '#R1 PUT 同 id + 掩码同样去重');
+
+  // --- 复审 R2：陈旧页面回填（旧行还在，但 id 已失效）不得落盘字面量掩码 ---
+  const staleWrite = applyPutBody(
+    { webhooks: [{ id: 'other', name: 'Other', secret: 'S_OTHER' }] },
+    { webhooks: [{ id: 'stale-id', name: 'Stale', secret: SECRET_MASK, url: 'https://s.invalid/' }] });
+  assert(staleWrite.webhooks[0].secret === undefined && staleWrite.webhooks[0].name === 'Stale',
+    '#R2 配置里已有其它行 + id 失效 → 丢弃掩码而非落盘 ***（行本身保留）');
+  assert(!JSON.stringify(staleWrite.webhooks).includes('"' + SECRET_MASK + '"'),
+    '#R2 落盘内容不含字面量掩码');
+
+  // --- 复审 M2b：畸形 current.apiToken 在 PUT 往返中不得被洗成空串 ---
+  const m2b1 = applyPutBody({ apiToken: 123 }, { apiToken: SECRET_MASK });
+  assert(m2b1.apiToken === 123, '#M2b GET 打码回传（掩码）不把畸形 apiToken 洗成空串');
+  const m2b2 = applyPutBody({ apiToken: 123 }, {});
+  assert(m2b2.apiToken === 123, '#M2b 不含 apiToken 字段的 PUT 也不改动畸形值');
+  const m2b3 = applyPutBody({ apiToken: 123 }, { apiToken: 'fixed' });
+  assert(m2b3.apiToken === 'fixed', '#M2b 显式设置字符串 token 仍可修复畸形状态');
 }
 
 // ---- 11c. issue #9 / D3：磁盘上的非字符串 apiToken 必须 fail closed ----
