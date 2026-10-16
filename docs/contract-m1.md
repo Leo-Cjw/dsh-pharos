@@ -89,7 +89,9 @@ const DEFAULT_CONFIG = {
   - `ctx.on('agent/turn-stopping', …)` → interrupted（兜底）。
   - `ctx.on('agent/request-error', ({failure}) => …)` → limit/error（兜底；failure.code 含 limit/rate/429/配额语义→limit，否则 error）。
   - `ctx.jobs.events.subscribe({owners:'scope'}, …)`（jobEvents=true 时）：settled 且 `event.awaited!==true` 且 cause!=='teardown' 且 status==='failed'→error、'killed'→interrupted。
-  - **reason.kind→kind 映射**：completed→done、error→error、aborted→error、interrupted→interrupted、blocked→limit（阻塞语义贴近上限/配额，正文说明）、max-tokens→limit、未知→不产出帧（静默；下落 agent/error 兜底）。
+  - **reason.kind→kind 映射**：completed→done、error→error、**aborted→interrupted**、interrupted→interrupted、blocked→limit（阻塞语义贴近上限/配额，正文说明）、max-tokens→limit、未知→不产出帧（静默；下落 agent/error 兜底）。
+    - aborted 归 interrupted 而非 error（与 turn-notify 的 aborted→error 不同）：用户按「停止」不是故障，且**同一次中断**还会触发 `agent/turn-stopping`（也产 interrupted）——两者归一后去重键一致（`interrupted:sid`），用户只收到一条提醒（issue #11）。真正的运行故障仍走 error。
+    - 未知 kind **不消费** turn 记录：`agent/status idle` 的完成兜底以「记录仍在」为判据；先删记录会让兜底永久失效（0.2.0-rc.2 的正常回合会产出 `turn/end{kind:'forked'}`，见 issue #12）。
 - **host 产出**：帧总线（作用域内去重窗 3000ms，key=dedupeKey）→ SSE 广播 + webhook（quietHours 生效期不发 webhook；按 webhook.events 过滤；skipSubagents 时 agentType==='subagent' 帧不发 webhook）。
 - **浏览器消费**：
   - v0.3 引擎（uiSession.sessionStatus + sessions）原样保留，产出 needs-you（本会话级）与 done（本地计时补丁）。
