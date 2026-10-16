@@ -605,6 +605,93 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   disposer();
 }
 
+// ---- 11b. issue #9 / #10：apiToken 类型守卫、webhook secret 按 id 回填 ----
+{
+  const { applyPutBody, SECRET_MASK, normalizeConfig, deepMerge, DEFAULT_CONFIG } = store;
+
+  // --- issue #9：非字符串 apiToken 不得让鉴权整体失效 ---
+  const t1 = applyPutBody({ apiToken: 'real-token' }, { apiToken: 123 });
+  assert(t1.apiToken === 'real-token', '#9 非字符串 apiToken 不覆盖原 token（保持字符串）');
+  const t2 = applyPutBody({ apiToken: '' }, { apiToken: 123 });
+  assert(t2.apiToken === '' && typeof t2.apiToken === 'string', '#9 非字符串 apiToken 归一为空字符串而非数字');
+  assert(applyPutBody({ apiToken: 'abc' }, { apiToken: SECRET_MASK }).apiToken === 'abc', '#9 掩码仍保留原值');
+  assert(applyPutBody({ apiToken: 'abc' }, { apiToken: 'new' }).apiToken === 'new', '#9 字符串新值正常生效');
+  assert(applyPutBody({ apiToken: 'abc' }, { apiToken: '' }).apiToken === '', '#9 显式清空仍生效');
+  const n1 = normalizeConfig({ apiToken: 123, webhooks: 'nope' });
+  assert(n1.apiToken === '' && Array.isArray(n1.webhooks) && n1.webhooks.length === 0,
+    '#9/#13 加载时归一：apiToken 非字符串 → 空串，webhooks 非数组 → []');
+  const srcObj = { apiToken: 123, webhooks: 'nope' };
+  normalizeConfig(srcObj);
+  assert(srcObj.apiToken === 123 && srcObj.webhooks === 'nope', '#9 normalizeConfig 不改动入参');
+
+  // --- issue #10：掩码按稳定 id 回填，删行后不串台 ---
+  const rowA = { id: 'id-a', name: 'A', url: 'https://a.invalid/', secret: 'SECRET_A' };
+  const rowB = { id: 'id-b', name: 'B', url: 'https://b.invalid/', secret: 'SECRET_B' };
+  const afterDelete = applyPutBody({ webhooks: [rowA, rowB] }, { webhooks: [{ id: 'id-b', name: 'B', url: 'https://b.invalid/', secret: SECRET_MASK }] });
+  assert(afterDelete.webhooks.length === 1, '#10 删行后只剩一行');
+  assert(afterDelete.webhooks[0].secret === 'SECRET_B', '#10 删掉第 0 行后 B 行仍拿到自己的 secret（不串台）');
+  assert(afterDelete.webhooks[0].secret !== 'SECRET_A', '#10 不再按下标拿到 A 的密钥');
+
+  const fresh = applyPutBody({ webhooks: [] }, { webhooks: [{ id: 'brand-new', name: 'N', secret: SECRET_MASK, url: 'https://n.invalid/' }] });
+  assert(fresh.webhooks.length === 1 && fresh.webhooks[0].secret === undefined,
+    '#10 新增行的掩码被丢弃（不把字面量当密钥落盘）');
+  assert(!JSON.stringify(fresh.webhooks).includes('"***"'), '#10 落盘内容不含字面量掩码');
+
+  // 无 id（未升级的客户端 / 直接调 API）：退回下标匹配，保住既有契约「掩码=保留原值」
+  const legacy = applyPutBody({ webhooks: [{ name: 'L', secret: 'OLD' }] }, { webhooks: [{ name: 'L', secret: SECRET_MASK }] });
+  assert(legacy.webhooks[0].secret === 'OLD', '#10 无 id 旧行：按下标回填，密钥不丢（向后兼容）');
+  assert(typeof legacy.webhooks[0].id === 'string' && legacy.webhooks[0].id !== '', '#10 无 id 旧行保存后补发稳定 id');
+  // 无 id 且下标也对不上 → 只能丢弃（不猜、不串）
+  const orphan = applyPutBody({ webhooks: [] }, { webhooks: [{ name: 'X', secret: SECRET_MASK }] });
+  assert(orphan.webhooks[0].secret === undefined, '#10 无 id 且无对应旧行 → 丢弃掩码字段');
+
+  assert(applyPutBody({ webhooks: [rowA] }, { webhooks: [{ id: 'id-a', secret: 'NEW' }] }).webhooks[0].secret === 'NEW',
+    '#10 用户填新密钥 → 直接生效');
+  assert(applyPutBody({ webhooks: [rowA] }, { webhooks: [{ id: 'id-a', secret: '' }] }).webhooks[0].secret === '',
+    '#10 用户清空密钥 → 落盘空串');
+
+  // --- issue #13：webhooks 只接受数组，非法类型保持原值 ---
+  const kept = applyPutBody({ webhooks: [rowA] }, { webhooks: { oops: true } });
+  assert(Array.isArray(kept.webhooks) && kept.webhooks.length === 1 && kept.webhooks[0].id === 'id-a',
+    '#13 非数组 webhooks 被拒绝，保留原数组');
+  assert(Array.isArray(applyPutBody({ webhooks: [] }, { webhooks: 'nope' }).webhooks), '#13 字符串 webhooks 被拒绝');
+
+  const normalized = normalizeConfig(deepMerge(DEFAULT_CONFIG, { webhooks: { oops: true } }));
+  assert(Array.isArray(normalized.webhooks) && normalized.webhooks.length === 0,
+    '#13 畸形配置加载后 webhooks 恒为数组（消除重启后静默失效）');
+
+  // 有 id 时**绝不**退回下标：即便 id 对不上，也不能拿同下标行的密钥
+  const mismatched = applyPutBody({ webhooks: [rowA, rowB] }, { webhooks: [{ id: 'brand-new', name: 'N', secret: SECRET_MASK }] });
+  assert(mismatched.webhooks[0].secret === undefined,
+    '#10 id 对不上时不回退下标（否则会拿到 A 的密钥）');
+
+  const two = applyPutBody({ webhooks: [] }, { webhooks: [{ name: '1' }, { name: '2' }] });
+  const [i1, i2] = two.webhooks.map((w) => w.id);
+  assert(typeof i1 === 'string' && i1.length >= 8 && i1 !== i2, '#10 每行分到唯一稳定 id');
+}
+
+// ---- 11c. issue #9：磁盘上的非字符串 apiToken 不得让 trigger 免鉴权 ----
+{
+  const { ctx, disposer } = setup();
+  const cfgFile = path.join(profileDir, 'pharos.json');
+  await putConfig(ctx, { apiToken: 'guarded' });
+  const raw = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+  raw.apiToken = 123;
+  fs.writeFileSync(cfgFile, JSON.stringify(raw), 'utf8');
+  disposer();
+
+  const { ctx: ctx2, disposer: disposer2 } = setup();
+  const proper = await putConfig(ctx2, { apiToken: 'guarded' });
+  assert(proper.res.state.status === 200, '#9 畸形值被归一后重新设置字符串 token → 200');
+  const withToken = await trigger(ctx2, { extraHeaders: { 'x-pharos-token': 'guarded' } });
+  assert(withToken.res.state.status === 200, '#9 带正确 token → 200');
+  const withoutToken = await trigger(ctx2, {});
+  assert(withoutToken.res.state.status === 401, '#9 设了 token 后不带 token → 401（校验未被跳过）');
+  const wrongToken = await trigger(ctx2, { extraHeaders: { 'x-pharos-token': 'nope' } });
+  assert(wrongToken.res.state.status === 401, '#9 错误 token → 401');
+  disposer2();
+}
+
 // ---- 12. store 路径解析单元 ----
 if (store) {
   {
