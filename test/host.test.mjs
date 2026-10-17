@@ -1,7 +1,7 @@
 // dsh-pharos — host 半单测（M1，契约 §8）
 //
 // 覆盖（黑盒经 apply() + stub ctx/webServer/fetch；白盒直接 import lib/host/*）：
-//   · reason.kind→kind 全映射（completed/error/aborted/interrupted/blocked/max-tokens → 定类，
+//   · reason.kind→kind 全映射（completed/error/**aborted→interrupted**/interrupted/blocked/max-tokens → 定类，
 //     未知静默）+ 帧字段（kind/severity/sessionId/ts/dedupeKey/note/tokens/source）
 //   · usage 四桶计量、耗时计量
 //   · 兜底：agent/error、agent/turn-stopping（aborted 守卫）、agent/request-error（limit 语义）、
@@ -244,7 +244,7 @@ function unfreezeDate() { globalThis.Date = RealDate; }
 if (frames && typeof frames.mapTurnEndReason === 'function') {
   const m = frames.mapTurnEndReason;
   const cases = [
-    ['completed', 'done'], ['error', 'error'], ['aborted', 'error'],
+    ['completed', 'done'], ['error', 'error'], ['aborted', 'interrupted'],
     ['interrupted', 'interrupted'], ['blocked', 'limit'], ['max-tokens', 'limit'],
   ];
   for (const [reasonKind, want] of cases) {
@@ -300,7 +300,7 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
 // ---- 4. error/aborted/interrupted/blocked/max-tokens 定类（黑盒） ----
 {
   const specs = [
-    ['error', 'error', 'error'], ['aborted', 'error', 'error'],
+    ['error', 'error', 'error'], ['aborted', 'interrupted', 'warn'],
     ['interrupted', 'interrupted', 'warn'], ['blocked', 'limit', 'error'],
     ['max-tokens', 'limit', 'error'],
   ];
@@ -326,6 +326,100 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   disposer();
 }
 
+// ---- 5b. issue #11：用户按「停止」只应收到一条提醒 ----
+// 真实事件顺序（asar 实据）：turn-stopping{signal.aborted} 先到，finally 里那次无条件的
+// turn/end{reason.kind:"aborted"} 后到。修复前两者分别产 interrupted:sid 与 error:sid
+// —— 去重键不同，用户收到「已中断」+「出错」两条。
+// ⚠️ 载荷必须按**真实形状**构造：agentEvents() 的 fused() 会给每个 agent/* 事件注入 agent
+// （`interface Agent { readonly id; readonly session }`）。此前用「不带 agent」的形状，
+// 断言只锁住了 `sid === ''` 早退分支，真实链路上的去重完全没被测到。
+{
+  const { ctx, disposer } = setup();
+  const { res } = openStream(ctx);
+  const s = { id: "S1", header: {} };
+  const ac = new AbortController(); ac.abort();
+  fireSessionEvent(ctx, { type: "turn/start", session: s });
+  fireSessionEvent(ctx, { type: "assistant/message", session: s, usage: { inputTokens: 6, outputTokens: 4 } });
+  fireAgentEvent(ctx, "agent/turn-stopping", { turn: 1, signal: ac.signal, agent: { id: "S1", session: s } });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "aborted", reason: { kind: "user" } }, session: s });
+  await wait(80);
+  const stopFrames = sseFrames(res);
+  assert(stopFrames.length === 1, `#11 点一次停止只产 1 帧（实得 ${stopFrames.length}：${stopFrames.map((f) => f.kind).join("+")}）`);
+  assert(stopFrames[0] && stopFrames[0].kind === "interrupted", "#11 归为 interrupted（不是 error：用户停止不是故障）");
+  assert(stopFrames[0] && stopFrames[0].severity === "warn", "#11 severity=warn（非 error 红）");
+  // 先到者占住去重位 → 它必须自带统计，否则停止提醒永远缺 tokens/缓存/速率
+  assert(stopFrames[0] && String(stopFrames[0].note).includes("10 tokens"),
+    `#11 存活的兜底帧带当轮统计（实得 note=${JSON.stringify(stopFrames[0] && stopFrames[0].note)}）`);
+  disposer();
+}
+{
+  // 防御分支：载荷意外不带 agent（当前运行时不会发生）→ 静默，由 turn/end 主信号独自出帧
+  const { ctx, disposer } = setup();
+  const { res } = openStream(ctx);
+  const s = { id: "S1", header: {} };
+  fireSessionEvent(ctx, { type: "turn/start", session: s });
+  fireAgentEvent(ctx, "agent/turn-stopping", { turn: 1, signal: (() => { const a = new AbortController(); a.abort(); return a.signal; })() });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "aborted" }, session: s });
+  await wait(80);
+  const frames = sseFrames(res);
+  assert(frames.length === 1 && frames[0].kind === "interrupted",
+    `#11 无法归属会话时静默，只剩 turn/end 主信号（实得 ${frames.length}：${frames.map((f) => f.kind).join("+")}）`);
+  disposer();
+}
+
+// ---- 5c. issue #12：未知 kind 的 turn/end 不得吃掉完成兜底 ----
+// 现实来源：`forked` 只在 buildForkSeed() 里合成（fork 出的子会话构造 seed），
+// 而「Constructor seed events have no session/event notification」→ 插件收不到 live 的
+// turn/end{forked}。所以这是**构造出来的未知 kind**，防的是「未来新增 kind / 出现未知 kind 时
+// 兜底被永久吃掉」——修复前 takeTurn() 先删记录，agent/status idle 的判据（记录仍在）恒假。
+{
+  const { ctx, disposer } = setup();
+  const { res } = openStream(ctx);
+  const s = { id: "S1", header: {} };
+  fireSessionEvent(ctx, { type: "turn/start", session: s });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "forked" }, session: s });
+  await wait(40);
+  assert(sseFrames(res).length === 0, "#12 未知 kind 本身不产帧（仍静默）");
+  fireAgentEvent(ctx, "agent/status", { agent: { session: s }, status: "idle" });
+  await wait(60);
+  const doneFrames = sseFrames(res);
+  assert(doneFrames.length === 1 && doneFrames[0].kind === "done",
+    `#12 未知 kind 之后 agent/status idle 仍能补出 done（实得 ${doneFrames.length} 帧）`);
+  disposer();
+}
+{
+  // 对照：已识别的 kind 仍然正常消费记录（不该出现 done + 兜底 done 双帧）
+  const { ctx, disposer } = setup();
+  const { res } = openStream(ctx);
+  const s = { id: "S1", header: {} };
+  fireSessionEvent(ctx, { type: "turn/start", session: s });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "completed" }, session: s });
+  await wait(40);
+  fireAgentEvent(ctx, "agent/status", { agent: { session: s }, status: "idle" });
+  await wait(60);
+  assert(sseFrames(res).length === 1, "#12 已知 kind 消费记录后，兜底不重复产帧");
+  disposer();
+}
+{
+  // 「保留的记录最终仍要被消费」：未知 kind 之后紧跟一个正常 completed → 恰好 1 帧 done，
+  // 且记录已被取走（再来 idle 不得补第二帧）。防的是有人在 kind 判断旁再插一处 takeTurn()。
+  const { ctx, disposer } = setup();
+  const { res } = openStream(ctx);
+  const s = { id: "S1", header: {} };
+  fireSessionEvent(ctx, { type: "turn/start", session: s });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "forked" }, session: s });
+  await wait(30);
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "completed" }, session: s });
+  await wait(40);
+  const frames = sseFrames(res);
+  assert(frames.length === 1 && frames[0].kind === "done",
+    `#12 未知 kind 之后紧跟 completed → 恰好 1 帧 done（实得 ${frames.length}：${frames.map((f) => f.kind).join("+")}）`);
+  fireAgentEvent(ctx, "agent/status", { agent: { session: s }, status: "idle" });
+  await wait(40);
+  assert(sseFrames(res).length === 1, "#12 记录被 completed 消费后，idle 不再补帧（无滞留）");
+  disposer();
+}
+
 // ---- 6. 兜底信号 ----
 {
   // agent/error → error
@@ -339,18 +433,27 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   assert(f && f.failure && String(f.failure.message).includes('boom'), 'agent/error 带 failure.message');
   disposer();
 
-  // agent/turn-stopping：signal.aborted=false → 静默（守卫）；true → interrupted
+  // agent/turn-stopping：仅「aborted 且可归属会话」才产帧。
+  // 真实载荷 = `{turn: 回合序号(数字), signal}` + 派发时 fused() 注入的 `agent`
+  // → 正常运行时恒可归属；下面先验「无 agent」的防御分支，再验可归属时出帧。
   {
     const { ctx: ctx2, disposer: d2 } = setup();
     const { res: res2 } = openStream(ctx2);
-    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: { id: 't1' }, signal: new AbortController().signal });
+    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: 1, signal: new AbortController().signal });
     await wait(40);
     assert(sseFrames(res2).length === 0, 'turn-stopping 非 aborted → 静默（防正常收尾误报）');
     const aborted = new AbortController(); aborted.abort();
-    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: { id: 't1' }, signal: aborted.signal });
+    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: 1, signal: aborted.signal });
+    await wait(40);
+    assert(sseFrames(res2).length === 0,
+      'turn-stopping aborted 但载荷无会话 → 静默（防御分支，避免 unknown 重复提醒，issue #11）');
+    // 可归属时出帧（真实载荷形状：agent 由 fused() 注入）
+    const s2 = { id: 'S-tops', header: {} };
+    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: 1, agent: { id: 'S-tops', session: s2 }, signal: aborted.signal });
     await wait(40);
     f = sseFrames(res2)[0];
-    assert(f && f.kind === 'interrupted', 'turn-stopping aborted=true → interrupted 帧');
+    assert(f && f.kind === 'interrupted' && f.sessionId === 'S-tops',
+      'turn-stopping aborted + 可归属会话 → interrupted 帧（兜底保留）');
     d2();
   }
 
