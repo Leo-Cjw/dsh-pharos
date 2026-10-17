@@ -400,6 +400,25 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   assert(sseFrames(res).length === 1, "#12 已知 kind 消费记录后，兜底不重复产帧");
   disposer();
 }
+{
+  // 「保留的记录最终仍要被消费」：未知 kind 之后紧跟一个正常 completed → 恰好 1 帧 done，
+  // 且记录已被取走（再来 idle 不得补第二帧）。防的是有人在 kind 判断旁再插一处 takeTurn()。
+  const { ctx, disposer } = setup();
+  const { res } = openStream(ctx);
+  const s = { id: "S1", header: {} };
+  fireSessionEvent(ctx, { type: "turn/start", session: s });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "forked" }, session: s });
+  await wait(30);
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "completed" }, session: s });
+  await wait(40);
+  const frames = sseFrames(res);
+  assert(frames.length === 1 && frames[0].kind === "done",
+    `#12 未知 kind 之后紧跟 completed → 恰好 1 帧 done（实得 ${frames.length}：${frames.map((f) => f.kind).join("+")}）`);
+  fireAgentEvent(ctx, "agent/status", { agent: { session: s }, status: "idle" });
+  await wait(40);
+  assert(sseFrames(res).length === 1, "#12 记录被 completed 消费后，idle 不再补帧（无滞留）");
+  disposer();
+}
 
 // ---- 6. 兜底信号 ----
 {
@@ -414,23 +433,23 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
   assert(f && f.failure && String(f.failure.message).includes('boom'), 'agent/error 带 failure.message');
   disposer();
 
-  // agent/turn-stopping：仅「aborted 且可归属会话」才产帧
-  // 运行时载荷是 {turn, signal}（无会话对象）→ 归属不了就静默，交给 turn/end 主信号，
-  // 否则会以 sessionId 'unknown' 产出第二条「已中断」（issue #11）。
+  // agent/turn-stopping：仅「aborted 且可归属会话」才产帧。
+  // 真实载荷 = `{turn: 回合序号(数字), signal}` + 派发时 fused() 注入的 `agent`
+  // → 正常运行时恒可归属；下面先验「无 agent」的防御分支，再验可归属时出帧。
   {
     const { ctx: ctx2, disposer: d2 } = setup();
     const { res: res2 } = openStream(ctx2);
-    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: { id: 't1' }, signal: new AbortController().signal });
+    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: 1, signal: new AbortController().signal });
     await wait(40);
     assert(sseFrames(res2).length === 0, 'turn-stopping 非 aborted → 静默（防正常收尾误报）');
     const aborted = new AbortController(); aborted.abort();
-    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: { id: 't1' }, signal: aborted.signal });
+    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: 1, signal: aborted.signal });
     await wait(40);
     assert(sseFrames(res2).length === 0,
-      'turn-stopping aborted 但载荷无会话 → 静默（避免 unknown 重复提醒，issue #11）');
-    // 未来运行时若在载荷里带上会话，兜底能力自动恢复
+      'turn-stopping aborted 但载荷无会话 → 静默（防御分支，避免 unknown 重复提醒，issue #11）');
+    // 可归属时出帧（真实载荷形状：agent 由 fused() 注入）
     const s2 = { id: 'S-tops', header: {} };
-    fireAgentEvent(ctx2, 'agent/turn-stopping', { agent: { session: s2 }, turn: { id: 't1' }, signal: aborted.signal });
+    fireAgentEvent(ctx2, 'agent/turn-stopping', { turn: 1, agent: { id: 'S-tops', session: s2 }, signal: aborted.signal });
     await wait(40);
     f = sseFrames(res2)[0];
     assert(f && f.kind === 'interrupted' && f.sessionId === 'S-tops',

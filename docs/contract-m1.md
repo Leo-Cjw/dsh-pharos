@@ -109,7 +109,7 @@ const DEFAULT_CONFIG = {
 - 静默：`currentQuiet`——needs-you 时当前会话 + 页面聚焦 → 只亮标记不弹；`doneHiddenOnly`——done 仅页面隐藏时弹（v0.3 默认）。
 - quiet hours：`quietHours.enabled` 时在 [start,end) 区间（跨午夜）静默 on-screen 渠道与 webhook（host 侧读同一配置）。
 - 二次提醒：needs-you 挂起 reAlertMs(10min) 补发一次（v0.3 保留；浏览器侧实现）。
-- 短回合：本轮不实现 minTurnDurationMs（列入 M2；文档已注明语义）——host 对 turn/end 一律产出，浏览器/去重消化。
+- 短回合：本轮不实现 minTurnDurationMs（列入 M2；文档已注明语义）——host 对**已识别** kind 一律产出（未知 kind 静默且不消费 turn 记录，交兜底信号），浏览器/去重消化。
 
 ## 7. 运行时事实速查（已核实 / 需冲刺核实）
 
