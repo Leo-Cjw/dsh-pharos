@@ -327,26 +327,51 @@ if (frames && typeof frames.mapTurnEndReason === 'function') {
 }
 
 // ---- 5b. issue #11：用户按「停止」只应收到一条提醒 ----
-// 真实事件顺序（0.2.0-rc.2）：turn-stopping{aborted} 与 turn/end{kind:aborted} 都会到达。
-// 修复前两者分别产 interrupted:sid 与 error:sid —— 去重键不同，用户收到「已中断」+「出错」两条。
+// 真实事件顺序（asar 实据）：turn-stopping{signal.aborted} 先到，finally 里那次无条件的
+// turn/end{reason.kind:"aborted"} 后到。修复前两者分别产 interrupted:sid 与 error:sid
+// —— 去重键不同，用户收到「已中断」+「出错」两条。
+// ⚠️ 载荷必须按**真实形状**构造：agentEvents() 的 fused() 会给每个 agent/* 事件注入 agent
+// （`interface Agent { readonly id; readonly session }`）。此前用「不带 agent」的形状，
+// 断言只锁住了 `sid === ''` 早退分支，真实链路上的去重完全没被测到。
 {
   const { ctx, disposer } = setup();
   const { res } = openStream(ctx);
   const s = { id: "S1", header: {} };
+  const ac = new AbortController(); ac.abort();
   fireSessionEvent(ctx, { type: "turn/start", session: s });
-  fireAgentEvent(ctx, "agent/turn-stopping", { turn: { id: "t1" }, signal: (() => { const a = new AbortController(); a.abort(); return a.signal; })() });
-  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "aborted" }, session: s });
+  fireSessionEvent(ctx, { type: "assistant/message", session: s, usage: { inputTokens: 6, outputTokens: 4 } });
+  fireAgentEvent(ctx, "agent/turn-stopping", { turn: 1, signal: ac.signal, agent: { id: "S1", session: s } });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "aborted", reason: { kind: "user" } }, session: s });
   await wait(80);
   const stopFrames = sseFrames(res);
   assert(stopFrames.length === 1, `#11 点一次停止只产 1 帧（实得 ${stopFrames.length}：${stopFrames.map((f) => f.kind).join("+")}）`);
   assert(stopFrames[0] && stopFrames[0].kind === "interrupted", "#11 归为 interrupted（不是 error：用户停止不是故障）");
   assert(stopFrames[0] && stopFrames[0].severity === "warn", "#11 severity=warn（非 error 红）");
+  // 先到者占住去重位 → 它必须自带统计，否则停止提醒永远缺 tokens/缓存/速率
+  assert(stopFrames[0] && String(stopFrames[0].note).includes("10 tokens"),
+    `#11 存活的兜底帧带当轮统计（实得 note=${JSON.stringify(stopFrames[0] && stopFrames[0].note)}）`);
+  disposer();
+}
+{
+  // 防御分支：载荷意外不带 agent（当前运行时不会发生）→ 静默，由 turn/end 主信号独自出帧
+  const { ctx, disposer } = setup();
+  const { res } = openStream(ctx);
+  const s = { id: "S1", header: {} };
+  fireSessionEvent(ctx, { type: "turn/start", session: s });
+  fireAgentEvent(ctx, "agent/turn-stopping", { turn: 1, signal: (() => { const a = new AbortController(); a.abort(); return a.signal; })() });
+  fireSessionEvent(ctx, { type: "turn/end", reason: { kind: "aborted" }, session: s });
+  await wait(80);
+  const frames = sseFrames(res);
+  assert(frames.length === 1 && frames[0].kind === "interrupted",
+    `#11 无法归属会话时静默，只剩 turn/end 主信号（实得 ${frames.length}：${frames.map((f) => f.kind).join("+")}）`);
   disposer();
 }
 
 // ---- 5c. issue #12：未知 kind 的 turn/end 不得吃掉完成兜底 ----
-// 0.2.0-rc.2 会在正常回合产出 turn/end{kind:"forked"}。修复前它先 takeTurn() 删掉记录，
-// 于是 agent/status idle 的兜底判据（记录仍在）永远为假 → 该类回合的完成提醒全部丢失。
+// 现实来源：`forked` 只在 buildForkSeed() 里合成（fork 出的子会话构造 seed），
+// 而「Constructor seed events have no session/event notification」→ 插件收不到 live 的
+// turn/end{forked}。所以这是**构造出来的未知 kind**，防的是「未来新增 kind / 出现未知 kind 时
+// 兜底被永久吃掉」——修复前 takeTurn() 先删记录，agent/status idle 的判据（记录仍在）恒假。
 {
   const { ctx, disposer } = setup();
   const { res } = openStream(ctx);

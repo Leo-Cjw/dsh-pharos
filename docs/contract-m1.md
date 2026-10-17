@@ -86,12 +86,12 @@ const DEFAULT_CONFIG = {
 - **host 订阅**（lib/host/frames.js + 组装处）：
   - `ctx.on('session/event', (session, event) => …)`：`turn/end` → 依 `event.data.reason.kind` 定类（映射表见下）；`assistant/message` 累积 usage 四桶；`turn/start` 起表计时。子代理判定：session/event 的 session 是否为子代理会话（header.origin==='subagent' || delegationDepth>0，照 my-notify isTopLevelAgent 语义；取不到就 'root'）。
   - `ctx.on('agent/error', ({turn, step, error}) => …)` → error（reason.kind 缺失时的兜底）。
-  - `ctx.on('agent/turn-stopping', …)` → interrupted（兜底）。
+  - `ctx.on('agent/turn-stopping', …)` → interrupted（兜底）。**它比 turn/end 先到**（循环内 `await dispatch.serial`，turn/end 在 finally 里 append）→ 先占去重位，故该帧按 turn/end 同口径补算 cacheHitRate/tps，否则停止提醒缺统计。归属不到会话时静默（**防御分支**：所有 agent/* 载荷都被 `agentEvents()` 的 `fused()` 注入 `agent`，而 `Agent` 带 `session`/`id`，正常运行恒可归属）。
   - `ctx.on('agent/request-error', ({failure}) => …)` → limit/error（兜底；failure.code 含 limit/rate/429/配额语义→limit，否则 error）。
   - `ctx.jobs.events.subscribe({owners:'scope'}, …)`（jobEvents=true 时）：settled 且 `event.awaited!==true` 且 cause!=='teardown' 且 status==='failed'→error、'killed'→interrupted。
   - **reason.kind→kind 映射**：completed→done、error→error、**aborted→interrupted**、interrupted→interrupted、blocked→limit（阻塞语义贴近上限/配额，正文说明）、max-tokens→limit、未知→不产出帧（静默；下落 agent/error 兜底）。
     - aborted 归 interrupted 而非 error（与 turn-notify 的 aborted→error 不同）：用户按「停止」不是故障，且**同一次中断**还会触发 `agent/turn-stopping`（也产 interrupted）——两者归一后去重键一致（`interrupted:sid`），用户只收到一条提醒（issue #11）。真正的运行故障仍走 error。
-    - 未知 kind **不消费** turn 记录：`agent/status idle` 的完成兜底以「记录仍在」为判据；先删记录会让兜底永久失效（0.2.0-rc.2 的正常回合会产出 `turn/end{kind:'forked'}`，见 issue #12）。
+    - 未知 kind **不消费** turn 记录：`agent/status idle` 的完成兜底以「记录仍在」为判据；先删记录会让兜底永久失效（issue #12）。注：`forked` 只由 `buildForkSeed()` 合成进 fork 子会话的构造 seed，「Constructor seed events have no session/event notification」→ 当前不会以 live 事件到达插件；故本项是**潜伏缺陷**，防的是未来新增/未知 kind。
 - **host 产出**：帧总线（作用域内去重窗 3000ms，key=dedupeKey）→ SSE 广播 + webhook（quietHours 生效期不发 webhook；按 webhook.events 过滤；skipSubagents 时 agentType==='subagent' 帧不发 webhook）。
 - **浏览器消费**：
   - v0.3 引擎（uiSession.sessionStatus + sessions）原样保留，产出 needs-you（本会话级）与 done（本地计时补丁）。
@@ -115,8 +115,8 @@ const DEFAULT_CONFIG = {
 
 **已核实（0.2.0-rc.2，详见 docs/functional-architecture.md §1）**：
 - `ctx.webServer.register({kind:'exact'|'prefix', path, handler(req,res)})`（dshmarket/lib/routes.js 实装；node http 风格，`res.writeHead/end/write`）。
-- `session/event`：`ctx.on('session/event', (session, event) => …)`；`turn/end event.data = {turn, reason:{kind}}`（dsh-session:791 产出；本运行时已见 kind∈{interrupted,forked}，complete/error 等由 agent-loop 的 turn/end 补充——**实现时对未知 kind 静默降级**）。
-- `agent/error {turn,step,error}`、`agent/turn-stopping {turn,signal}`、`agent/request-error {turn,step,provider,failure,retryPolicy,signal}`（dsh-agent-loop）。
+- `session/event`：`ctx.on('session/event', (session, event) => …)`；`turn/end event.data = {turn, reason:{kind}}`（dsh-session:791 产出；已见 kind∈{interrupted,forked}——但 `forked` 只由 `buildForkSeed()` 合成到 fork 子会话 seed，不作为 live 事件派发；complete/error 等由 agent-loop 的 turn/end 补充——**实现时对未知 kind 静默降级**）。
+- `agent/error {turn,step,error}`、`agent/turn-stopping {turn,signal}`、`agent/request-error {turn,step,provider,failure,retryPolicy,signal}`（dsh-agent-loop）。⚠️ 以上是 emit 的**原始载荷**；派发时 `agentEvents()` 的 `fused()` 会追加 `agent`（`Agent` 带 `session`/`id`）→ 兜底事件**可归属会话**（0.2.1-rc.1 asar 复核）。
 - job 事件：`ctx.jobs.events.subscribe({owners:'scope'}, e => …)`；e.type∈settled/removed；job.status∈running/stopping/completed/killed/failed（dsh-tool-jobs）。
 - 设置页槽位：`settings.section`（顶级分区）与 `settings.plugins.tab`（「内置插件」分区内标签页）**两个槽本机都存在**。
   - **原记「`settings.section` 不存在」有误（2026-10-05 复核）**：查错了包 —— 槽位声明方是 `@deepseek-ai/dsh-client-ui-settings-general/lib/client.js:1137-1140`（`"settings.section": { kind: "list", scope: "root" }`），导航投影在同文件 `:1017-1040`（`slots.entries("settings.section")` → `sort(order)`）、渲染在 `:338`（`renderSlot("settings.section", { close }, { only: active })`）。`dsh-client-ui-settings` 只提供底座与配置表单，本身不声明该槽。详见 §10。
